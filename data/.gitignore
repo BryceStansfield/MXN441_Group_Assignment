@@ -2,3 +2,6 @@
 *.csv
 *.txt
 *.xml
+*.marker
+*.TXT
+*.html
