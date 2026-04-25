@@ -46,7 +46,7 @@ class YearMonth:
         self.month = month
     
     @staticmethod
-    def parse_from_filename(file_name: pathlib.Path):
+    def parse_from_new_fide_filename(file_name: pathlib.Path):
         base_name = file_name.stem  # Remove .zip or .xml
         parts = base_name.split('_')
         if len(parts) < 3:
@@ -55,6 +55,22 @@ class YearMonth:
         month_year_part = parts[1]  # e.g., 'jan15'
         month_str = month_year_part[:3]
         year_str = month_year_part[3:5]
+
+        if month_str not in months:
+            raise ValueError(f"Unknown month in file name: {month_str}")
+        
+        month = months[month_str]
+        year = int('20' + year_str)  # Convert '15' to 2015
+
+        return YearMonth(year, month)
+    
+    @staticmethod
+    def parse_from_old_fide_filename(file_name: pathlib.Path):
+        base_name = file_name.stem  # Remove .zip or .TXT
+        
+        month_year_str = base_name[0:5].lower()  # e.g., 'jan15'
+        month_str = month_year_str[:3]
+        year_str = month_year_str[3:5]
 
         if month_str not in months:
             raise ValueError(f"Unknown month in file name: {month_str}")
@@ -105,62 +121,103 @@ def parse_new_format_monthly_data(file_path):
 
 def parse_old_format_monthly_data(file_path, year_month: YearMonth):
     # The old FIDE data format is very odd, we have to rely on the spacing of the header line to parse the data.
-    FIELDS = ["ID_NUMBER", "NAME", "TITLE", "COUNTRY", year_month.short_form().upper(), "GAMES", "BIRTHDAY", "FLAG"]
+    ORIGINAL_VERSION_FIELDS = ["ID_NUMBER", "NAME", "TITLE", "COUNTRY", year_month.short_form().upper(), "GAMES", "BIRTHDAY", "FLAG"]
+    SECOND_VERSION_FIELDS = ["ID number", "Name", "Titl", "Fed", year_month.short_form().capitalize(), "Games", "Born", "Flag"]
 
-    with open(file_path, 'r') as f:
+    with open(file_path, 'r', encoding='ISO-8859-1') as f:
         lines = f.readlines()
     header_line = lines[0]
-    fields_starts = [header_line.find(field) for field in FIELDS]
+    original_fields_starts = [header_line.find(field) for field in ORIGINAL_VERSION_FIELDS]
+    second_fields_starts = [header_line.find(field) for field in SECOND_VERSION_FIELDS]
 
     players = {}
 
-    for line in lines[1:]:
-        if line.strip() == "":
-            continue
-        
-        player_id = int(line[fields_starts[0]:fields_starts[1]].strip())
-        name = line[fields_starts[1]:fields_starts[2]].strip()
-        title = line[fields_starts[2]:fields_starts[3]].strip()
-        country = line[fields_starts[3]:fields_starts[4]].strip()
-        elo = int(line[fields_starts[4]:fields_starts[5]].strip())
-        games = int(line[fields_starts[5]:fields_starts[6]].strip())
-        birthday = line[fields_starts[6]:fields_starts[7]].strip().replace('.', '/')
-        flag = line[fields_starts[7]:].strip()
+    # January 2001 doesn't have birthdays,
+    if sum(1 for start in original_fields_starts if start != -1) >= 7:
+        for line in lines[1:]:
+            if line.strip() == "":
+                continue
+            
+            player_id = int(line[original_fields_starts[0]:original_fields_starts[1]].strip())
+            name = line[original_fields_starts[1]:original_fields_starts[2]].strip()
+            title = line[original_fields_starts[2]:original_fields_starts[3]].strip()
+            country = line[original_fields_starts[3]:original_fields_starts[4]].strip()
+            elo = int(line[original_fields_starts[4]:original_fields_starts[5]].strip())
 
-        if 'w' in flag: # Womens competitor. Weird format pre 2012.
-            womens_title = title
-            sex = 'F'
+            if original_fields_starts[6] != -1:
+                games = int(line[original_fields_starts[5]:original_fields_starts[6]].strip())
+                birthday = line[original_fields_starts[6]:original_fields_starts[7]].strip().replace('.', '/')
+            else:
+                games = int(line[original_fields_starts[5]:original_fields_starts[7]].strip())
+                birthday = None
+            flag = line[original_fields_starts[7]:].strip()
 
-            if "(GM)" in name:
-                title = "g"
-            elif "(IM)" in name:
-                title = "m"
-        else:
-            womens_title = ""
-            sex = 'M'
+            if 'w' in flag: # Womens competitor. Weird format pre 2012.
+                womens_title = title
+                sex = 'F'
 
-        players[player_id] = PlayerMonth(player_id, name, country, sex, title, womens_title, None, elo, games, None, birthday, flag)
+                if "(GM)" in name:
+                    title = "g"
+                elif "(IM)" in name:
+                    title = "m"
+            else:
+                womens_title = ""
+                sex = 'M'
 
+            players[player_id] = PlayerMonth(player_id, name, country, sex, title, womens_title, None, elo, games, None, birthday, flag)
+    elif all(start != -1 for start in second_fields_starts):
+        for line in lines[1:]:
+            if line.strip() == "":
+                continue
+
+            player_id = int(line[second_fields_starts[0]:second_fields_starts[1]].strip())
+            name = line[second_fields_starts[1]:second_fields_starts[2]].strip()
+            title = line[second_fields_starts[2]:second_fields_starts[3]].strip()
+            country = line[second_fields_starts[3]:second_fields_starts[4]].strip()
+            elo = int(line[second_fields_starts[4]:second_fields_starts[5]].strip())
+            games = int(line[second_fields_starts[5]:second_fields_starts[6]].strip())
+            birthday = "01/01/" + line[second_fields_starts[6]:second_fields_starts[7]].strip()
+            flag = line[second_fields_starts[7]:].strip()
+
+            if 'w' in flag: # Womens competitor. Weird format pre 2012.
+                womens_title = title
+                sex = 'F'
+
+                if "(GM)" in name:
+                    title = "g"
+                elif "(IM)" in name:
+                    title = "m"
+            else:
+                womens_title = ""
+                sex = 'M'
+
+            players[player_id] = PlayerMonth(player_id, name, country, sex, title, womens_title, None, elo, games, None, birthday, flag)
+    
+    return players
+
+def parse_all_old_format_monthly_data(standard_data_path):
+    all_data = {}
+
+    for file in standard_data_path.glob('*.TXT'):
+        year_month = YearMonth.parse_from_old_fide_filename(file)
+        players = parse_old_format_monthly_data(file, year_month)
+        all_data[year_month] = players
+        print("Loaded data for: ", year_month)
+
+    return all_data
+    
 def load_all_standard_monthly_data():
     standard_data_path = pathlib.Path('data/standard')
 
     all_data = {}
-    players_to_year_months = {}
 
     for xml_file in standard_data_path.glob('*.xml'):
-        year_month = YearMonth.parse_from_filename(xml_file)
+        year_month = YearMonth.parse_from_new_fide_filename(xml_file)
         players = parse_new_format_monthly_data(xml_file)
-        all_data[year_month] = players
-
-        for player in players:
-            if player not in players_to_year_months:
-                players_to_year_months[player] = [year_month]
-            else:
-                players_to_year_months[player].append(year_month)
-        
+        all_data[year_month] = players        
         print("Loaded data for: ", year_month)
 
-    return all_data, players_to_year_months
+    return all_data
 
 class UntransformedDataset:
     def __init__(self, all_data, players_to_year_months):
@@ -186,7 +243,17 @@ def filter_data_by_player_top_elo_and_gm_status(all_data, players_to_year_months
     return all_data, players_to_year_months
 
 def filter_and_save_standard_data(path):
-    all_data, players_to_year_months = load_all_standard_monthly_data()
+    old_fide_data = parse_all_old_format_monthly_data(pathlib.Path('data/standard'))
+    all_data = load_all_standard_monthly_data()
+    all_data.update(old_fide_data)
+
+    players_to_year_months = {}
+    for ym, players in all_data.items():
+        for player in players:
+            if player not in players_to_year_months:
+                players_to_year_months[player] = set()
+            players_to_year_months[player].add(ym)
+
     all_data, players_to_year_months = filter_data_by_player_top_elo_and_gm_status(all_data, players_to_year_months)
 
     untransformed_data = UntransformedDataset(all_data, players_to_year_months)
