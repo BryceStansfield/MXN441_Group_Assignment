@@ -131,10 +131,21 @@ def parse_old_format_monthly_data(file_path, year_month: YearMonth):
     second_fields_starts = [header_line.find(field) for field in SECOND_VERSION_FIELDS]
 
     players = {}
+    start_line = 1
 
-    # January 2001 doesn't have birthdays,
-    if sum(1 for start in original_fields_starts if start != -1) >= 7:
-        for line in lines[1:]:
+    if sum(1 for start in original_fields_starts if start != -1) >= 7 or all(start != -1 for start in second_fields_starts):
+        pass
+    elif year_month.year == 2003 and year_month.month == 10 or \
+         year_month.year == 2004 and year_month.month == 1 or \
+         year_month.year == 2005 and year_month.month == 4:
+        start_line = 0  # Manually verified that the header is missing from this file
+    else:
+        raise ValueError(f"Unexpected header format in file: {file_path}")
+
+    # January 2001 doesn't have birthdays, so we have to use a special parsing method for that month.
+    # We also use this method for some finnicky years.
+    if year_month.year < 2002 or year_month.year == 2002 and year_month.month < 10:
+        for line in lines[start_line:]:
             if line.strip() == "":
                 continue
             
@@ -165,10 +176,12 @@ def parse_old_format_monthly_data(file_path, year_month: YearMonth):
                 sex = 'M'
 
             players[player_id] = PlayerMonth(player_id, name, country, sex, title, womens_title, None, elo, games, None, birthday, flag)
-    elif all(start != -1 for start in second_fields_starts):
+    else:
         # Need to completely redo this based on number of spaces between fields...
-        for line in lines[1:]:
-            if line.strip() == "":
+        for i, line in enumerate(lines[start_line:]):
+            if (line := line.strip()) == "":
+                continue
+            if i == len(lines[start_line:]) - 1 and len(line) < 10:
                 continue
             
             # First a number (ID), then a name (which may contain up to 1 consecutive space), then a title (which may be empty, but if not is 1-2 characters), then a mandatory 3 letter country code, then ELO, then number of games played, year of birth (optional), and finally an optional flag (non-numeric).
@@ -182,11 +195,19 @@ def parse_old_format_monthly_data(file_path, year_month: YearMonth):
 
             name_str = ""
             spaces_in_a_row = 0
-            while spaces_in_a_row < 2:
+            last_non_space_was_comma = False
+            seen_non_space = False
+
+            while not seen_non_space or ((len(name_str) < 30 and spaces_in_a_row < 5) or spaces_in_a_row < 2 or last_non_space_was_comma and spaces_in_a_row < 5):    # Some mid-name spacing issues...
                 if line[cur_char] == ' ':
                     spaces_in_a_row += 1
                 else:
                     spaces_in_a_row = 0
+                    seen_non_space = True
+                    if line[cur_char] == ',':
+                        last_non_space_was_comma = True
+                    else:
+                        last_non_space_was_comma = False
                 name_str += line[cur_char]
                 cur_char += 1
             name = name_str.strip()
@@ -195,17 +216,30 @@ def parse_old_format_monthly_data(file_path, year_month: YearMonth):
             if len(remainder_parts[0]) <= 2:
                 title = remainder_parts[0]
                 remainder_parts = remainder_parts[1:]
+            else:
+                title = ""
             
             country = remainder_parts[0]
             elo = int(remainder_parts[1])
             games = int(remainder_parts[2])
 
-            if len(remainder_parts[3]) == 4: # Birthday is present
-                birthday = remainder_parts[3]
-                flag = remainder_parts[4] if len(remainder_parts) > 4 else ""
+            if len(remainder_parts) > 3:
+                if len(remainder_parts[3]) == 4 or len(remainder_parts[3]) == 8: # Birthday is present
+                    birthday = remainder_parts[3]
+                    if len(birthday) == 4:
+                        birthday = f"01/01/{birthday}"
+                    else:
+                        birthday = birthday.replace('.', '/')
+                    flag = remainder_parts[4] if len(remainder_parts) > 4 else ""
+                elif remainder_parts[3] == '.': # Some special formatting for missing birthdays on some txt files.
+                    birthday = None
+                    flag = remainder_parts[5] if len(remainder_parts) > 5 else ""
+                else:
+                    birthday = None
+                    flag = remainder_parts[3] if len(remainder_parts) > 3 else ""
             else:
                 birthday = None
-                flag = remainder_parts[3] if len(remainder_parts) > 3 else ""
+                flag = ""
 
             if 'w' in flag: # Womens competitor. Weird format pre 2012.
                 womens_title = title
