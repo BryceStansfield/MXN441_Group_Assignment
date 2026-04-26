@@ -166,18 +166,46 @@ def parse_old_format_monthly_data(file_path, year_month: YearMonth):
 
             players[player_id] = PlayerMonth(player_id, name, country, sex, title, womens_title, None, elo, games, None, birthday, flag)
     elif all(start != -1 for start in second_fields_starts):
+        # Need to completely redo this based on number of spaces between fields...
         for line in lines[1:]:
             if line.strip() == "":
                 continue
+            
+            # First a number (ID), then a name (which may contain up to 1 consecutive space), then a title (which may be empty, but if not is 1-2 characters), then a mandatory 3 letter country code, then ELO, then number of games played, year of birth (optional), and finally an optional flag (non-numeric).
+            # We can't rely on secondfield starts, so we'll just have to parse based on the spacing of individual lines.
+            cur_char = 0
+            id_str = ""
+            while line[cur_char] in '1234567890': # ID number
+                id_str += line[cur_char]
+                cur_char += 1
+            player_id = int(id_str)
 
-            player_id = int(line[second_fields_starts[0]:second_fields_starts[1]].strip())
-            name = line[second_fields_starts[1]:second_fields_starts[2]].strip()
-            title = line[second_fields_starts[2]:second_fields_starts[3]].strip()
-            country = line[second_fields_starts[3]:second_fields_starts[4]].strip()
-            elo = int(line[second_fields_starts[4]:second_fields_starts[5]].strip())
-            games = int(line[second_fields_starts[5]:second_fields_starts[6]].strip())
-            birthday = "01/01/" + line[second_fields_starts[6]:second_fields_starts[7]].strip()
-            flag = line[second_fields_starts[7]:].strip()
+            name_str = ""
+            spaces_in_a_row = 0
+            while spaces_in_a_row < 2:
+                if line[cur_char] == ' ':
+                    spaces_in_a_row += 1
+                else:
+                    spaces_in_a_row = 0
+                name_str += line[cur_char]
+                cur_char += 1
+            name = name_str.strip()
+
+            remainder_parts = line[cur_char:].strip().split()
+            if len(remainder_parts[0]) <= 2:
+                title = remainder_parts[0]
+                remainder_parts = remainder_parts[1:]
+            
+            country = remainder_parts[0]
+            elo = int(remainder_parts[1])
+            games = int(remainder_parts[2])
+
+            if len(remainder_parts[3]) == 4: # Birthday is present
+                birthday = remainder_parts[3]
+                flag = remainder_parts[4] if len(remainder_parts) > 4 else ""
+            else:
+                birthday = None
+                flag = remainder_parts[3] if len(remainder_parts) > 3 else ""
 
             if 'w' in flag: # Womens competitor. Weird format pre 2012.
                 womens_title = title
@@ -203,7 +231,6 @@ def parse_all_old_format_monthly_data(standard_data_path):
         players = parse_old_format_monthly_data(file, year_month)
         all_data[year_month] = players
         print("Loaded data for: ", year_month)
-
     return all_data
     
 def load_all_standard_monthly_data():
