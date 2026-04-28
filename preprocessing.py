@@ -1,6 +1,9 @@
 import pathlib
+from urllib import response
 import xml.etree.ElementTree as ET
 import pickle
+import bs4
+import multiprocessing
 
 months = {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
           'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12}
@@ -79,6 +82,22 @@ class YearMonth:
         year = int('20' + year_str)  # Convert '15' to 2015
 
         return YearMonth(year, month)
+
+    @staticmethod
+    def parse_from_olimpbase_filename(file_name: pathlib.Path):
+        base_name = file_name.stem  # Remove .zip or .html
+        
+        month_year_str = base_name[3:10].lower()  # e.g., 'jan15'
+        month_str = month_year_str[:3]
+        year_str = month_year_str[3:]
+
+        if month_str not in months:
+            raise ValueError(f"Unknown month in file name: {month_str}")
+        
+        month = months[month_str]
+        year = int(year_str)
+
+        return YearMonth(year, month)
     
     def short_form(self) -> str:
         month_str = [k for k, v in months.items() if v == self.month][0]
@@ -90,6 +109,11 @@ class YearMonth:
     
     def __hash__(self) -> int:
         return hash((self.year, self.month))
+
+    def __lt__(self, other):
+        if self.year == other.year:
+            return self.month < other.month
+        return self.year < other.year
 
 def parse_new_format_monthly_data(file_path):
     tree = ET.parse(file_path)
@@ -117,9 +141,21 @@ def parse_new_format_monthly_data(file_path):
 
         players[fideid] = PlayerMonth(fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag)
 
+    print("Loaded data for: ", file_path)
     return players
 
+def special_old_format_cases(line):
+    broken_lines = {
+        " 6500889                                        CRC  1969    0        i\n": " 6500889   Mubayiwa, Bruce             CRC  1969    0        .",
+    }
+
+    if line in broken_lines:
+        return broken_lines[line]
+    return line
+
 def parse_old_format_monthly_data(file_path, year_month: YearMonth):
+    print(f"Loading data for: {file_path}")
+
     # The old FIDE data format is very odd, we have to rely on the spacing of the header line to parse the data.
     ORIGINAL_VERSION_FIELDS = ["ID_NUMBER", "NAME", "TITLE", "COUNTRY", year_month.short_form().upper(), "GAMES", "BIRTHDAY", "FLAG"]
     SECOND_VERSION_FIELDS = ["ID number", "Name", "Titl", "Fed", year_month.short_form().capitalize(), "Games", "Born", "Flag"]
@@ -133,10 +169,11 @@ def parse_old_format_monthly_data(file_path, year_month: YearMonth):
     players = {}
     start_line = 1
 
-    if sum(1 for start in original_fields_starts if start != -1) >= 7 or all(start != -1 for start in second_fields_starts):
+    if sum(1 for start in original_fields_starts if start != -1) >= 7 or sum(1 for start in second_fields_starts if start != -1) >= 7:      # Some have one field missing or a mistake in the month/year
         pass
     elif year_month.year == 2003 and year_month.month == 10 or \
          year_month.year == 2004 and year_month.month == 1 or \
+         year_month.year == 2003 and year_month.month == 7 or \
          year_month.year == 2005 and year_month.month == 4:
         start_line = 0  # Manually verified that the header is missing from this file
     else:
@@ -179,6 +216,7 @@ def parse_old_format_monthly_data(file_path, year_month: YearMonth):
     else:
         # Need to completely redo this based on number of spaces between fields...
         for i, line in enumerate(lines[start_line:]):
+            line = special_old_format_cases(line)
             if (line := line.strip()) == "":
                 continue
             if i == len(lines[start_line:]) - 1 and len(line) < 10:
@@ -255,28 +293,138 @@ def parse_old_format_monthly_data(file_path, year_month: YearMonth):
 
             players[player_id] = PlayerMonth(player_id, name, country, sex, title, womens_title, None, elo, games, None, birthday, flag)
     
+    print("Loaded data for: ", year_month)
     return players
 
 def parse_all_old_format_monthly_data(standard_data_path):
     all_data = {}
+    all_files = list(standard_data_path.glob('*.TXT')) + list(standard_data_path.glob('*.txt'))
+    year_months = [YearMonth.parse_from_old_fide_filename(file) for file in all_files]
+    players_per_file = [parse_old_format_monthly_data(file, ym) for file, ym in zip(all_files, year_months)]
 
-    for file in standard_data_path.glob('*.TXT'):
-        year_month = YearMonth.parse_from_old_fide_filename(file)
-        players = parse_old_format_monthly_data(file, year_month)
+    all_data = {ym: players for ym, players in zip(year_months, players_per_file)}
+
+    return all_data
+
+def int_or_none(s:str):
+    try:
+        return int(s)
+    except (ValueError, TypeError):
+        return None
+
+def nonempty_str_or_none(s:str):
+    if s == "":
+        return None
+    return s
+
+def parse_olimpbase_monthly_data(file_path):
+    # The olimp data is formatted as a <pre> html table. So we parse it based on the *visible* spacing of the table header.
+    # Note, the header is the same for every month, but some fields only start being populated later on, such as FIDE ID. These will have to be reconcilliated later.
+
+    FIELD_NAMES = ["pos", "Player_ID", "Name", "Title", "Fed", "Rtng", "+/-", "gms", "Birthday", "Sex", "Flag"]
+    header_substring = "pos Player_ID  Name                                  Title Fed  Rtng   +/-  gms   Birthday   Sex  Flag"
+    
+    try:
+        with open(file_path, 'r') as f:
+            soup = bs4.BeautifulSoup(f, 'html.parser')
+    except UnicodeDecodeError:
+        with open(file_path, 'r', encoding='ISO-8859-1') as f:
+            soup = bs4.BeautifulSoup(f, 'html.parser')
+    
+    players = [] # FIDE IDs don't neccessarily exist yet, need to do reconcilliation.
+
+    text = soup.text
+    header_yet = False
+    header_positions = []
+
+    for line in text.splitlines():
+        if not header_yet:
+            if header_substring in line:
+                header_yet = True
+                for field in FIELD_NAMES:
+                    header_positions.append(line.find(field))
+            continue
+
+        if line.strip() == "":
+            continue
+        elif "Inactive players" in line:
+            continue
+        elif header_substring in line:
+            continue
+
+        # Parsing the actual data.
+        player_id = int_or_none(line[header_positions[1]:header_positions[2]].strip())
+        name = line[header_positions[2]:header_positions[3]].strip()
+        title = nonempty_str_or_none(line[header_positions[3]:header_positions[4]].strip())
+        country = nonempty_str_or_none(line[header_positions[4]:header_positions[5]].strip())
+        rating = int_or_none(line[header_positions[5]:header_positions[6]].strip())
+        games = int_or_none(line[header_positions[7]:header_positions[8]].strip())
+        birthday = nonempty_str_or_none(line[header_positions[8]:header_positions[9]].strip())
+        flag = line[header_positions[10]:].strip()
+
+        if name == "":
+            continue # TODO: Remove breakpoints
+
+        if 'w' in flag: # Womens competitor. Weird format pre 2012.
+            womens_title = title
+            sex = 'F'
+
+            if "(GM)" in name:
+                title = "g"
+            elif "(IM)" in name:
+                title = "m"
+        else:
+            womens_title = ""
+            sex = 'M'
+        
+        players.append(PlayerMonth(player_id, name, country, sex, title, womens_title, None, rating, games, None, birthday, flag))
+    return players
+
+def load_all_olimpbase_monthly_data():
+    all_data = {}
+
+    for file in pathlib.Path('data/standard/olimpbase').glob('*.html'):
+        year_month = YearMonth.parse_from_olimpbase_filename(file) # Bit hacky
+        players = parse_olimpbase_monthly_data(file)
         all_data[year_month] = players
         print("Loaded data for: ", year_month)
+    
+    # ID Reconcilliation.
+    print("Starting ID reconcilliation...")
+    def normalize_player_name(name):
+        return name.lower().replace(' ', '').replace('-', '').replace('.', '').replace(",", "")
+    
+    normalized_player_names_to_id = {}
+    unreconcilable_players = set()
+    fake_id = -1
+    
+    for ym in all_data.__reversed__():
+        for player in all_data[ym]:
+            normalized_name = normalize_player_name(player.name)
+            if normalized_name in normalized_player_names_to_id:
+                player.fideid = normalized_player_names_to_id[normalized_name]
+            elif player.fideid is not None:
+                normalized_player_names_to_id[normalized_name] = player.fideid
+            else:
+                unreconcilable_players.add(player.name)
+                normalized_player_names_to_id[normalized_name] = fake_id
+                player.fideid = fake_id
+                fake_id -= 1
+                
+    print(f"ID reconcilliation complete. Num unreconcilable players: {len(unreconcilable_players)}")
+    print("Unreconcilable players will be given a fake ID between -1 and -infty")
+
+    all_data = {ym: {player.fideid: player for player in players} for ym, players in all_data.items()}
+        
     return all_data
     
 def load_all_standard_monthly_data():
     standard_data_path = pathlib.Path('data/standard')
-
-    all_data = {}
-
-    for xml_file in standard_data_path.glob('*.xml'):
-        year_month = YearMonth.parse_from_new_fide_filename(xml_file)
-        players = parse_new_format_monthly_data(xml_file)
-        all_data[year_month] = players        
-        print("Loaded data for: ", year_month)
+    files = list(standard_data_path.glob('*.xml'))
+    year_months = [YearMonth.parse_from_new_fide_filename(file) for file in files]
+    players_per_file = [parse_new_format_monthly_data(file) for file in files]
+    
+    all_data = {ym: players for ym, players in zip(year_months, players_per_file)}        
 
     return all_data
 
@@ -291,7 +439,7 @@ class UntransformedDataset:
 def filter_data_by_player_top_elo_and_gm_status(all_data, players_to_year_months):
     remaining_players = set()
     for player, year_months in players_to_year_months.items():
-        max_elo = max(all_data[ym][player].rating for ym in year_months)
+        max_elo = max(all_data[ym][player].rating if all_data[ym][player].rating is not None else 0 for ym in year_months)
         is_gm = any(all_data[ym][player].title == 'GM' for ym in year_months)
 
         if max_elo >= 2500 or is_gm: # The paper only models players with elos above 2500, and GMs.
@@ -304,9 +452,12 @@ def filter_data_by_player_top_elo_and_gm_status(all_data, players_to_year_months
     return all_data, players_to_year_months
 
 def filter_and_save_standard_data(path):
+    olimp_data = load_all_olimpbase_monthly_data()
+    all_data = {}
     old_fide_data = parse_all_old_format_monthly_data(pathlib.Path('data/standard'))
     all_data = load_all_standard_monthly_data()
     all_data.update(old_fide_data)
+    all_data.update(olimp_data)
 
     players_to_year_months = {}
     for ym, players in all_data.items():
@@ -314,6 +465,10 @@ def filter_and_save_standard_data(path):
             if player not in players_to_year_months:
                 players_to_year_months[player] = set()
             players_to_year_months[player].add(ym)
+
+    # Temp, for debugging
+    with open(pathlib.Path('data/standard/players_to_year_months.pkl'), 'wb') as f:
+        pickle.dump(players_to_year_months, f)
 
     all_data, players_to_year_months = filter_data_by_player_top_elo_and_gm_status(all_data, players_to_year_months)
 
@@ -329,6 +484,10 @@ def open_filtered_standard_data():
             return pickle.load(f)
     else:
         return filter_and_save_standard_data(pathlib.Path('data/standard/filtered_standard_data.pkl'))
+
+class PlayerFirstEloDates:
+    def __init__(self, player_id, player_data_by_year_month):
+        self.player_to_first_elo_date = player_to_first_elo_date
 
 if __name__ == "__main__":
     print(open_filtered_standard_data())
