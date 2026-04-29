@@ -4,28 +4,111 @@ import xml.etree.ElementTree as ET
 import pickle
 import bs4
 import multiprocessing
+import sqlite3
 
 months = {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
           'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12}
 
-"""
-<player>
-<fideid>35077023</fideid>
-<name>A Chakravarthy</name>
-<country>IND</country>
-<sex>M</sex>
-<title></title>
-<w_title></w_title>
-<o_title></o_title>
-<rating>1151</rating>
-<games>0</games>
-<k>40</k>
-<birthday>1986</birthday>
-<flag></flag>
-</player>
+# Database schema, persistance, and queries:
+def open_sqlite3_chess_db(db_path):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = cursor.fetchall()
 
-"""
+    # Check if tables YearMonthElos and YearMonthParseCompletions exist, if not create them.
+    if ('YearMonthElos',) not in tables:
+        cursor.execute("CREATE TABLE IF NOT EXISTS YearMonthElos (iid INTEGER PRIMARY KEY, year INTEGER, month INTEGER, fideid INTEGER, name TEXT, country TEXT, sex TEXT, title TEXT, w_title TEXT, o_title TEXT, rating INTEGER, games INTEGER, k INTEGER, birthday TEXT, flag TEXT)")
+    if ('YearMonthParseCompletions',) not in tables:
+        cursor.execute("CREATE TABLE IF NOT EXISTS YearMonthParseCompletions (year INTEGER, month INTEGER, PRIMARY KEY (year, month))")
+    if ('PlayerMaxElosByYearMonth',) not in tables:
+        cursor.execute("CREATE TABLE IF NOT EXISTS PlayerMaxElosByYearMonth (fideid INTEGER, year INTEGER, month INTEGER, max_elo INTEGER, PRIMARY KEY (fideid, year, month))")
+    conn.commit()
+
+    return conn, cursor
+
+def commit_year_month_elos_to_db(cursor: sqlite3.Cursor, year_month, players):
+    for player in players.values():
+        cursor.execute("INSERT INTO YearMonthElos (year, month, fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                          (year_month.year, year_month.month, player.fideid, player.name, player.country, player.sex, player.title, player.w_title, player.o_title, player.rating, player.games, player.k, player.birthday, player.flag))
+    cursor.execute("INSERT INTO YearMonthParseCompletions (year, month) VALUES (?, ?)", (year_month.year, year_month.month))
+    cursor.connection.commit()
+
+def commit_year_month_elos_to_db_if_not_exists(cursor: sqlite3.Cursor, year_month, players):
+    if check_year_month_parsed(cursor, year_month):
+        print(f"Data for {year_month} already parsed, skipping.")
+        return
+    commit_year_month_elos_to_db(cursor, year_month, players)
+
+def check_year_month_parsed(cursor: sqlite3.Cursor, year_month):
+    cursor.execute("SELECT 1 FROM YearMonthParseCompletions WHERE year = ? AND month = ?", (year_month.year, year_month.month))
+    return cursor.fetchone() is not None
+
+def get_all_year_month_elos_from_db(cursor: sqlite3.Cursor):
+    cursor.execute("SELECT year, month, fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag FROM YearMonthElos")
+    rows = cursor.fetchall()
+
+    all_data = {}
+    for row in rows:
+        year, month, fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag = row
+        year_month = YearMonth(year, month)
+
+        if year_month not in all_data:
+            all_data[year_month] = {}
+        all_data[year_month][fideid] = row
+    
+    return all_data
+
+def get_elos_for_year_month_from_db(cursor: sqlite3.Cursor, year_month):
+    cursor.execute("SELECT fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag FROM YearMonthElos WHERE year = ? AND month = ?", (year_month.year, year_month.month))
+    rows = cursor.fetchall()
+    players = {}
+    for row in rows:
+        fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag = row
+        players[fideid] = PlayerMonth(fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag)
+    return players
+
+def persist_full_elo_history_to_db(all_data, cursor: sqlite3.Cursor):
+    for year_month, players in all_data.items():
+        commit_year_month_elos_to_db_if_not_exists(cursor, year_month, players)
+
+def get_max_elo_for_all_players(cursor: sqlite3.Cursor, cutoff_year_month):
+    # First we check if the PlayerMaxElos table is populated, if so we can just return that. Otherwise we compute it from the YearMonthElos table and populate the PlayerMaxElos table for future use.
+    cursor.execute("SELECT fideid, max_elo FROM PlayerMaxElosByYearMonth WHERE year = ? AND month = ?", (cutoff_year_month.year, cutoff_year_month.month))
+    rows = cursor.fetchall()
+    if len(rows) > 0:
+        return {row[0]: row[1] for row in rows}
+    
+    cursor.execute("""INSERT INTO PlayerMaxElosByYearMonth (fideid, year, month, max_elo)
+                   SELECT fideid, ?, ?, MAX(rating)
+                   FROM YearMonthElos
+                   WHERE (year < ? OR (year = ? AND month <= ?))
+                   GROUP BY fideid""", (cutoff_year_month.year, cutoff_year_month.month, cutoff_year_month.year, cutoff_year_month.year, cutoff_year_month.month))
+    cursor.connection.commit()
+    
+    return get_max_elo_for_all_players(cursor, cutoff_year_month)
+
+def get_all_data_for_players(cursor: sqlite3.Cursor, fideids):
+    cursor.execute("SELECT year, month, fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag FROM YearMonthElos WHERE fideid IN ({seq})".format(seq=','.join(['?']*len(fideids))), fideids)
+    rows = cursor.fetchall()
+    
+    player_data = {}    # player_data[fideid][year_month] = PlayerMonth()
+
+    for row in rows:
+        year, month, fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag = row
+        player = PlayerMonth(fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag)
+        year_month = YearMonth(year, month)
+        if fideid not in player_data:
+            player_data[fideid] = {}
+        player_data[fideid][year_month] = player
+
+    return player_data
+
+# Parsing and committing
 class PlayerMonth:
+    """Convenience class for temporarily storing parsed player month data. This is not meant to be used outside of the parsing functions."""
+    __slots__ = ['fideid', 'name', 'country', 'sex', 'title', 'w_title', 'o_title', 'rating', 'games', 'k', 'birthday', 'flag']
+
     def __init__(self, fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag):
         self.fideid = fideid
         self.name = name
@@ -44,6 +127,8 @@ class PlayerMonth:
         return f"PlayerMonth(fideid={self.fideid}, name='{self.name}')"
 
 class YearMonth:
+    __slots__ = ['year', 'month']
+
     def __init__(self, year, month):
         self.year = year
         self.month = month
@@ -296,15 +381,17 @@ def parse_old_format_monthly_data(file_path, year_month: YearMonth):
     print("Loaded data for: ", year_month)
     return players
 
-def parse_all_old_format_monthly_data(standard_data_path):
-    all_data = {}
+def commit_all_old_format_monthly_data(standard_data_path, cursor: sqlite3.Cursor):
     all_files = list(standard_data_path.glob('*.TXT')) + list(standard_data_path.glob('*.txt'))
-    year_months = [YearMonth.parse_from_old_fide_filename(file) for file in all_files]
-    players_per_file = [parse_old_format_monthly_data(file, ym) for file, ym in zip(all_files, year_months)]
 
-    all_data = {ym: players for ym, players in zip(year_months, players_per_file)}
-
-    return all_data
+    for file in all_files:
+        year_month = YearMonth.parse_from_old_fide_filename(file)
+        if check_year_month_parsed(cursor, year_month):
+            print(f"Data for {year_month} already parsed, skipping.")
+            continue
+        
+        players = parse_old_format_monthly_data(file, year_month)
+        commit_year_month_elos_to_db_if_not_exists(cursor, year_month, players)
 
 def int_or_none(s:str):
     try:
@@ -380,11 +467,18 @@ def parse_olimpbase_monthly_data(file_path):
         players.append(PlayerMonth(player_id, name, country, sex, title, womens_title, None, rating, games, None, birthday, flag))
     return players
 
-def load_all_olimpbase_monthly_data():
+def commit_all_olimpbase_monthly_data(cursor: sqlite3.Cursor):
     all_data = {}
 
-    for file in pathlib.Path('data/standard/olimpbase').glob('*.html'):
-        year_month = YearMonth.parse_from_olimpbase_filename(file) # Bit hacky
+    files = list(pathlib.Path('data/standard/olimpbase').glob('*.html'))
+    year_months = [YearMonth.parse_from_olimpbase_filename(file) for file in files]
+
+    if all(check_year_month_parsed(cursor, ym) for ym in year_months):
+        print("Olimpbase data already parsed, skipping.")
+        return
+
+    for file in files:
+        year_month = YearMonth.parse_from_olimpbase_filename(file)  # Yes, this is slightly redundant.
         players = parse_olimpbase_monthly_data(file)
         all_data[year_month] = players
         print("Loaded data for: ", year_month)
@@ -415,79 +509,45 @@ def load_all_olimpbase_monthly_data():
     print("Unreconcilable players will be given a fake ID between -1 and -infty")
 
     all_data = {ym: {player.fideid: player for player in players} for ym, players in all_data.items()}
-        
-    return all_data
+    persist_full_elo_history_to_db(all_data, cursor)
     
-def load_all_standard_monthly_data():
+def commit_all_standard_monthly_data(cursor: sqlite3.Cursor):
     standard_data_path = pathlib.Path('data/standard')
     files = list(standard_data_path.glob('*.xml'))
-    year_months = [YearMonth.parse_from_new_fide_filename(file) for file in files]
-    players_per_file = [parse_new_format_monthly_data(file) for file in files]
-    
-    all_data = {ym: players for ym, players in zip(year_months, players_per_file)}        
 
-    return all_data
+    for file in files:
+        year_month = YearMonth.parse_from_new_fide_filename(file)
 
-class UntransformedDataset:
-    def __init__(self, all_data, players_to_year_months):
-        self.all_data = all_data
-        self.players_to_year_months = players_to_year_months
+        if check_year_month_parsed(cursor, year_month):
+            print(f"Data for {year_month} already parsed, skipping.")
+            continue
+        players = parse_new_format_monthly_data(file)
+        commit_year_month_elos_to_db(cursor, year_month, players)
 
-    def __repr__(self) -> str:
-        return f"UntransformedDataset(num_year_months={len(self.all_data)}, num_players={len(self.players_to_year_months)})"
+def high_elo_player_data(cursor: sqlite3.Cursor, cutoff_year_month, elo_threshold=2500):
+    max_elos = get_max_elo_for_all_players(cursor, cutoff_year_month)
+    high_elo_players = {fideid: max_elo for fideid, max_elo in max_elos.items() if max_elo >= elo_threshold}
 
-def filter_data_by_player_top_elo_and_gm_status(all_data, players_to_year_months):
-    remaining_players = set()
-    for player, year_months in players_to_year_months.items():
-        max_elo = max(all_data[ym][player].rating if all_data[ym][player].rating is not None else 0 for ym in year_months)
-        is_gm = any(all_data[ym][player].title == 'GM' for ym in year_months)
+    return get_all_data_for_players(cursor, list(high_elo_players.keys()))
 
-        if max_elo >= 2500 or is_gm: # The paper only models players with elos above 2500, and GMs.
-            remaining_players.add(player)
-    
-    for ym in all_data:
-        all_data[ym] = {player: data for player, data in all_data[ym].items() if player in remaining_players}
-    players_to_year_months = {player: yms for player, yms in players_to_year_months.items() if player in remaining_players}
-    
-    return all_data, players_to_year_months
+def parse_and_save_standard_data(sqlite_db_path):
+    conn, cursor = open_sqlite3_chess_db(sqlite_db_path)
 
-def filter_and_save_standard_data(path):
-    olimp_data = load_all_olimpbase_monthly_data()
-    all_data = {}
-    old_fide_data = parse_all_old_format_monthly_data(pathlib.Path('data/standard'))
-    all_data = load_all_standard_monthly_data()
-    all_data.update(old_fide_data)
-    all_data.update(olimp_data)
+    commit_all_olimpbase_monthly_data(cursor)
+    commit_all_old_format_monthly_data(pathlib.Path('data/standard'), cursor)
+    commit_all_standard_monthly_data(cursor)
 
-    players_to_year_months = {}
-    for ym, players in all_data.items():
-        for player in players:
-            if player not in players_to_year_months:
-                players_to_year_months[player] = set()
-            players_to_year_months[player].add(ym)
+    return None
 
-    # Temp, for debugging
-    with open(pathlib.Path('data/standard/players_to_year_months.pkl'), 'wb') as f:
-        pickle.dump(players_to_year_months, f)
+def open_filtered_standard_data(sqlite_db_path, cutoff_year_month=YearMonth(2020, 1)):
+    print("Parsing and saving standard data to database...")
+    parse_and_save_standard_data(sqlite_db_path)
+    print("Parsing complete, loading data from database...")
 
-    all_data, players_to_year_months = filter_data_by_player_top_elo_and_gm_status(all_data, players_to_year_months)
-
-    untransformed_data = UntransformedDataset(all_data, players_to_year_months)
-    with open(path, 'wb') as f:
-        pickle.dump(untransformed_data, f)
-    return untransformed_data
-
-def open_filtered_standard_data():
-    filtered_data_path = pathlib.Path('data/standard/filtered_standard_data.pkl')
-    if filtered_data_path.exists():
-        with open(filtered_data_path, 'rb') as f:
-            return pickle.load(f)
-    else:
-        return filter_and_save_standard_data(pathlib.Path('data/standard/filtered_standard_data.pkl'))
-
-class PlayerFirstEloDates:
-    def __init__(self, player_id, player_data_by_year_month):
-        self.player_to_first_elo_date = player_to_first_elo_date
+    conn, cursor = open_sqlite3_chess_db(sqlite_db_path)
+    high_elo_data = high_elo_player_data(cursor)
+    return high_elo_data
 
 if __name__ == "__main__":
-    print(open_filtered_standard_data())
+    sqlite_db_path = pathlib.Path('data/standard/chess_elos.db')
+    print(open_filtered_standard_data(sqlite_db_path))
