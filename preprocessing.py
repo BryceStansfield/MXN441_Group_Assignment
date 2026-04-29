@@ -5,6 +5,8 @@ import pickle
 import bs4
 import multiprocessing
 import sqlite3
+import datetime
+import pandas as pd
 
 months = {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
           'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12}
@@ -12,6 +14,8 @@ months = {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
 # Database schema, persistance, and queries:
 def open_sqlite3_chess_db(db_path):
     conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row      # Allows us to access columns by name.
+
     cursor = conn.cursor()
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
     tables = cursor.fetchall()
@@ -43,21 +47,6 @@ def commit_year_month_elos_to_db_if_not_exists(cursor: sqlite3.Cursor, year_mont
 def check_year_month_parsed(cursor: sqlite3.Cursor, year_month):
     cursor.execute("SELECT 1 FROM YearMonthParseCompletions WHERE year = ? AND month = ?", (year_month.year, year_month.month))
     return cursor.fetchone() is not None
-
-def get_all_year_month_elos_from_db(cursor: sqlite3.Cursor):
-    cursor.execute("SELECT year, month, fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag FROM YearMonthElos")
-    rows = cursor.fetchall()
-
-    all_data = {}
-    for row in rows:
-        year, month, fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag = row
-        year_month = YearMonth(year, month)
-
-        if year_month not in all_data:
-            all_data[year_month] = {}
-        all_data[year_month][fideid] = row
-    
-    return all_data
 
 def get_elos_for_year_month_from_db(cursor: sqlite3.Cursor, year_month):
     cursor.execute("SELECT fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag FROM YearMonthElos WHERE year = ? AND month = ?", (year_month.year, year_month.month))
@@ -92,15 +81,14 @@ def get_all_data_for_players(cursor: sqlite3.Cursor, fideids):
     cursor.execute("SELECT year, month, fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag FROM YearMonthElos WHERE fideid IN ({seq})".format(seq=','.join(['?']*len(fideids))), fideids)
     rows = cursor.fetchall()
     
-    player_data = {}    # player_data[fideid][year_month] = PlayerMonth()
+    player_data = {}    # player_data[fideid][year_month] = playermonth data row.
 
     for row in rows:
-        year, month, fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag = row
-        player = PlayerMonth(fideid, name, country, sex, title, w_title, o_title, rating, games, k, birthday, flag)
-        year_month = YearMonth(year, month)
+        fideid = row["fideid"]
+        year_month = YearMonth(row["year"], row["month"])
         if fideid not in player_data:
             player_data[fideid] = {}
-        player_data[fideid][year_month] = player
+        player_data[fideid][year_month] = row
 
     return player_data
 
@@ -188,6 +176,9 @@ class YearMonth:
         month_str = [k for k, v in months.items() if v == self.month][0]
         year_str = str(self.year)[2:]
         return f"{month_str}{year_str}"
+    
+    def year_month_to_datetime(self):
+        return datetime.datetime(self.year, self.month, 1)  # Elo lists assumed to be released at the start of each month.
     
     def __repr__(self) -> str:
         return f"YearMonth(year={self.year}, month={self.month})"
@@ -539,15 +530,95 @@ def parse_and_save_standard_data(sqlite_db_path):
 
     return None
 
-def open_filtered_standard_data(sqlite_db_path, cutoff_year_month=YearMonth(2020, 1)):
+def open_filtered_standard_data(sqlite_db_path, elo_threshold=2500, cutoff_year_month=YearMonth(2024, 1)):  # Reference study cuts off at January 2024.
     print("Parsing and saving standard data to database...")
     parse_and_save_standard_data(sqlite_db_path)
     print("Parsing complete, loading data from database...")
 
     conn, cursor = open_sqlite3_chess_db(sqlite_db_path)
-    high_elo_data = high_elo_player_data(cursor)
+    high_elo_data = high_elo_player_data(cursor, cutoff_year_month, elo_threshold)
     return high_elo_data
+
+class PlayerEloFirstDates:
+    ELO_CUTOFFS = [2400, 2500, 2600, 2700, 2800]
+
+    def __init__(self, player_months: dict[YearMonth, object]):
+        self.first_elo_dates = {cutoff: None for cutoff in self.ELO_CUTOFFS}
+        self.first_gm_date = None
+
+        for ym in sorted(player_months.keys()):
+            row = player_months[ym]
+
+            if row["rating"] is None:
+                continue
+
+            for elo in self.ELO_CUTOFFS:
+                if row["rating"] >= elo and (self.first_elo_dates[elo] is None or ym < self.first_elo_dates[elo]):
+                    self.first_elo_dates[elo] = ym
+                if row["title"] is not None and 'g' in row["title"].lower() and 'w' not in row['title'].lower() and (self.first_gm_date is None or ym < self.first_gm_date):
+                    self.first_gm_date = ym
+
+    def __repr__(self) -> str:
+        return f"PlayerEloFirstDates(first_elo_dates={self.first_elo_dates}, first_gm_date={self.first_gm_date})"
+
+def get_player_personal_information(player_months: dict[YearMonth, object]):
+    # We take this from the latest month we have data for.
+    latest_month = max(player_months.keys())
+    row = player_months[latest_month]
+    return PlayerPersonalInformation(row["fideid"], row["name"], row["country"], row["sex"], row["birthday"])
+
+def birthday_string_to_datetime(birthday_str):
+    try:
+        if len(birthday_str) == 4:  # Year only
+            return datetime.datetime(int(birthday_str), 6, 1) # Assume June 1st for players with only year of birth
+        elif '.' in birthday_str: #Year.Month.Day format
+            if len(birthday_str) == 9: # Missing leading 1.
+                birthday_str = '1' + birthday_str
+            return datetime.datetime.strptime(birthday_str, "%Y.%m.%d")
+        elif '/' in birthday_str: # Day/Month/Year format
+            return datetime.datetime.strptime(birthday_str, "%d/%m/%Y")
+    except Exception as e:
+        pass
+
+    return datetime.datetime(1900, 1, 1) # Default value for invalid or missing birthdays.
+
+def build_tables_for_paper_models(player_data):
+    print("Building tables for paper models...")
+    base_table = pd.DataFrame(columns=["fideid", "birthday", "elo2400_date", "elo2500_date", "elo2600_date", "elo2700_date", "elo2800_date", "gm_title_date"])
+
+    for fideid, player_months in player_data.items():
+        personal_info = get_player_personal_information(player_months)
+        elo_first_dates = PlayerEloFirstDates(player_months)
+
+        base_table.loc[len(base_table)] = {
+            "fideid": fideid,
+            "birthday": birthday_string_to_datetime(personal_info.birthday) if personal_info.birthday is not None else None,
+            "elo2400_date": elo_first_dates.first_elo_dates[2400].year_month_to_datetime() if elo_first_dates.first_elo_dates[2400] is not None else None,
+            "elo2500_date": elo_first_dates.first_elo_dates[2500].year_month_to_datetime() if elo_first_dates.first_elo_dates[2500] is not None else None,
+            "elo2600_date": elo_first_dates.first_elo_dates[2600].year_month_to_datetime() if elo_first_dates.first_elo_dates[2600] is not None else None,
+            "elo2700_date": elo_first_dates.first_elo_dates[2700].year_month_to_datetime() if elo_first_dates.first_elo_dates[2700] is not None else None,
+            "elo2800_date": elo_first_dates.first_elo_dates[2800].year_month_to_datetime() if elo_first_dates.first_elo_dates[2800] is not None else None,
+            "gm_title_date": elo_first_dates.first_gm_date.year_month_to_datetime() if elo_first_dates.first_gm_date is not None else None
+        }
+    
+    # Players born after 2000
+    born_after_2000 = base_table["birthday"] > datetime.datetime(2000, 1, 1)
+
+    return base_table
+                              
+class PlayerPersonalInformation:
+    __slots__ = ['fideid', 'name', 'country', 'sex', 'birthday']
+
+    def __init__(self, fideid, name, country, sex, birthday):
+        self.fideid = fideid
+        self.name = name
+        self.country = country
+        self.sex = sex
+        self.birthday = birthday
+
 
 if __name__ == "__main__":
     sqlite_db_path = pathlib.Path('data/standard/chess_elos.db')
-    print(open_filtered_standard_data(sqlite_db_path))
+    filtered_data = open_filtered_standard_data(sqlite_db_path)
+    tables_for_models = build_tables_for_paper_models(filtered_data)
+    print(tables_for_models)
