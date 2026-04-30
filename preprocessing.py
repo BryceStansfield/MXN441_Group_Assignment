@@ -609,19 +609,19 @@ def build_tables_for_paper_models(player_data):
         base_table.loc[len(base_table)] = {
             "fideid": fideid,
             "sex": personal_info.sex,
-            "birthday": birthday_datetime if personal_info.birthday is not None else None,
-            "elo2400_date": elo_first_dates.first_elo_dates[2400].year_month_to_datetime() if elo_first_dates.first_elo_dates[2400] is not None else None,
-            "elo2500_date": elo_first_dates.first_elo_dates[2500].year_month_to_datetime() if elo_first_dates.first_elo_dates[2500] is not None else None,
-            "elo2600_date": elo_first_dates.first_elo_dates[2600].year_month_to_datetime() if elo_first_dates.first_elo_dates[2600] is not None else None,
-            "elo2700_date": elo_first_dates.first_elo_dates[2700].year_month_to_datetime() if elo_first_dates.first_elo_dates[2700] is not None else None,
-            "elo2400_to_2500_days": (elo_first_dates.first_elo_dates[2500].year_month_to_datetime() - elo_first_dates.first_elo_dates[2400].year_month_to_datetime()).days if elo_first_dates.first_elo_dates[2500] is not None else None,
-            "elo2500_to_2600_days": (elo_first_dates.first_elo_dates[2600].year_month_to_datetime() - elo_first_dates.first_elo_dates[2500].year_month_to_datetime()).days if elo_first_dates.first_elo_dates[2600] is not None else None,
-            "elo2600_to_2700_days": (elo_first_dates.first_elo_dates[2700].year_month_to_datetime() - elo_first_dates.first_elo_dates[2600].year_month_to_datetime()).days if elo_first_dates.first_elo_dates[2700] is not None else None,
+            "birthday": birthday_datetime if personal_info.birthday is not None else pd.NaT,
+            "elo2400_date": elo_first_dates.first_elo_dates[2400].year_month_to_datetime() if elo_first_dates.first_elo_dates[2400] is not None else pd.NaT,
+            "elo2500_date": elo_first_dates.first_elo_dates[2500].year_month_to_datetime() if elo_first_dates.first_elo_dates[2500] is not None else pd.NaT,
+            "elo2600_date": elo_first_dates.first_elo_dates[2600].year_month_to_datetime() if elo_first_dates.first_elo_dates[2600] is not None else pd.NaT,
+            "elo2700_date": elo_first_dates.first_elo_dates[2700].year_month_to_datetime() if elo_first_dates.first_elo_dates[2700] is not None else pd.NaT,
+            "elo2400_to_2500_days": (elo_first_dates.first_elo_dates[2500].year_month_to_datetime() - elo_first_dates.first_elo_dates[2400].year_month_to_datetime()).days if elo_first_dates.first_elo_dates[2500] is not None else pd.NaT,
+            "elo2500_to_2600_days": (elo_first_dates.first_elo_dates[2600].year_month_to_datetime() - elo_first_dates.first_elo_dates[2500].year_month_to_datetime()).days if elo_first_dates.first_elo_dates[2600] is not None else pd.NaT,
+            "elo2600_to_2700_days": (elo_first_dates.first_elo_dates[2700].year_month_to_datetime() - elo_first_dates.first_elo_dates[2600].year_month_to_datetime()).days if elo_first_dates.first_elo_dates[2700] is not None else pd.NaT,
             "max_elo": elo_first_dates.MAX_ELO,
-            "max_elo_date": elo_first_dates.MAX_ELO_DATE.year_month_to_datetime() if elo_first_dates.MAX_ELO_DATE is not None else None,
-            "gm_title_date": elo_first_dates.first_gm_date.year_month_to_datetime() if elo_first_dates.first_gm_date is not None else None,
-            "max_elo_age": personal_info.get_age_at_datetime(elo_first_dates.MAX_ELO_DATE.year_month_to_datetime()) if personal_info.birthday is not None and elo_first_dates.MAX_ELO_DATE is not None else None,
-            "gm_title_age": personal_info.get_age_at_datetime(elo_first_dates.first_gm_date.year_month_to_datetime()) if personal_info.birthday is not None and elo_first_dates.first_gm_date is not None else None,
+            "max_elo_date": elo_first_dates.MAX_ELO_DATE.year_month_to_datetime() if elo_first_dates.MAX_ELO_DATE is not None else pd.NaT,
+            "gm_title_date": elo_first_dates.first_gm_date.year_month_to_datetime() if elo_first_dates.first_gm_date is not None else pd.NaT,
+            "max_elo_age": personal_info.get_age_at_datetime(elo_first_dates.MAX_ELO_DATE.year_month_to_datetime()) if personal_info.birthday is not None and elo_first_dates.MAX_ELO_DATE is not None else pd.NaT,
+            "gm_title_age": personal_info.get_age_at_datetime(elo_first_dates.first_gm_date.year_month_to_datetime()) if personal_info.birthday is not None and elo_first_dates.first_gm_date is not None else pd.NaT,
         }
     
     ### Filter columns
@@ -676,7 +676,7 @@ def build_tables_for_paper_models(player_data):
         TabularModelData("Paper Model 12", base_table[gm_and_2700_before_or_at_20], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
     ]
 
-    return base_table
+    return models
                               
 class PlayerPersonalInformation:
     __slots__ = ['fideid', 'name', 'country', 'sex', 'birthday', 'birthday_datetime']
