@@ -541,6 +541,9 @@ def open_filtered_standard_data(sqlite_db_path, elo_threshold=2500, cutoff_year_
 
 class PlayerEloFirstDates:
     ELO_CUTOFFS = [2400, 2500, 2600, 2700, 2800]
+    
+    MAX_ELO = 0
+    MAX_ELO_DATE = YearMonth(1900, 1)
 
     def __init__(self, player_months: dict[YearMonth, object]):
         self.first_elo_dates = {cutoff: None for cutoff in self.ELO_CUTOFFS}
@@ -557,6 +560,10 @@ class PlayerEloFirstDates:
                     self.first_elo_dates[elo] = ym
                 if row["title"] is not None and 'g' in row["title"].lower() and 'w' not in row['title'].lower() and (self.first_gm_date is None or ym < self.first_gm_date):
                     self.first_gm_date = ym
+            
+            if row["rating"] > self.MAX_ELO:
+                self.MAX_ELO = row["rating"]
+                self.MAX_ELO_DATE = ym
 
     def __repr__(self) -> str:
         return f"PlayerEloFirstDates(first_elo_dates={self.first_elo_dates}, first_gm_date={self.first_gm_date})"
@@ -582,32 +589,97 @@ def birthday_string_to_datetime(birthday_str):
 
     return datetime.datetime(1900, 1, 1) # Default value for invalid or missing birthdays.
 
+class TabularModelData:
+    def __init__(self, model_name, data_table, X_columns, Y_columns):
+        self.model_name = model_name
+        self.data_table = data_table
+        self.X_columns = X_columns
+        self.Y_columns = Y_columns
+
 def build_tables_for_paper_models(player_data):
     print("Building tables for paper models...")
-    base_table = pd.DataFrame(columns=["fideid", "birthday", "elo2400_date", "elo2500_date", "elo2600_date", "elo2700_date", "elo2800_date", "gm_title_date"])
+    base_table = pd.DataFrame(columns=["fideid", "sex", "birthday", "elo2400_date", "elo2500_date", "elo2600_date", "elo2700_date", "elo2800_date", "2400_to_2500_days", "2500_to_2600_days", "2600_to_2700_days", "max_elo", "max_elo_date", "gm_title_date", "max_elo_age", "gm_title_age"])
 
     for fideid, player_months in player_data.items():
         personal_info = get_player_personal_information(player_months)
         elo_first_dates = PlayerEloFirstDates(player_months)
 
+        birthday_datetime = personal_info.birthday_datetime
+
         base_table.loc[len(base_table)] = {
             "fideid": fideid,
-            "birthday": birthday_string_to_datetime(personal_info.birthday) if personal_info.birthday is not None else None,
+            "sex": personal_info.sex,
+            "birthday": birthday_datetime if personal_info.birthday is not None else None,
             "elo2400_date": elo_first_dates.first_elo_dates[2400].year_month_to_datetime() if elo_first_dates.first_elo_dates[2400] is not None else None,
             "elo2500_date": elo_first_dates.first_elo_dates[2500].year_month_to_datetime() if elo_first_dates.first_elo_dates[2500] is not None else None,
             "elo2600_date": elo_first_dates.first_elo_dates[2600].year_month_to_datetime() if elo_first_dates.first_elo_dates[2600] is not None else None,
             "elo2700_date": elo_first_dates.first_elo_dates[2700].year_month_to_datetime() if elo_first_dates.first_elo_dates[2700] is not None else None,
-            "elo2800_date": elo_first_dates.first_elo_dates[2800].year_month_to_datetime() if elo_first_dates.first_elo_dates[2800] is not None else None,
-            "gm_title_date": elo_first_dates.first_gm_date.year_month_to_datetime() if elo_first_dates.first_gm_date is not None else None
+            "elo2400_to_2500_days": (elo_first_dates.first_elo_dates[2500].year_month_to_datetime() - elo_first_dates.first_elo_dates[2400].year_month_to_datetime()).days if elo_first_dates.first_elo_dates[2500] is not None else None,
+            "elo2500_to_2600_days": (elo_first_dates.first_elo_dates[2600].year_month_to_datetime() - elo_first_dates.first_elo_dates[2500].year_month_to_datetime()).days if elo_first_dates.first_elo_dates[2600] is not None else None,
+            "elo2600_to_2700_days": (elo_first_dates.first_elo_dates[2700].year_month_to_datetime() - elo_first_dates.first_elo_dates[2600].year_month_to_datetime()).days if elo_first_dates.first_elo_dates[2700] is not None else None,
+            "max_elo": elo_first_dates.MAX_ELO,
+            "max_elo_date": elo_first_dates.MAX_ELO_DATE.year_month_to_datetime() if elo_first_dates.MAX_ELO_DATE is not None else None,
+            "gm_title_date": elo_first_dates.first_gm_date.year_month_to_datetime() if elo_first_dates.first_gm_date is not None else None,
+            "max_elo_age": personal_info.get_age_at_datetime(elo_first_dates.MAX_ELO_DATE.year_month_to_datetime()) if personal_info.birthday is not None and elo_first_dates.MAX_ELO_DATE is not None else None,
+            "gm_title_age": personal_info.get_age_at_datetime(elo_first_dates.first_gm_date.year_month_to_datetime()) if personal_info.birthday is not None and elo_first_dates.first_gm_date is not None else None,
         }
+    
+    ### Filter columns
+    # Players who were already 2400+ at the time of the first elo report in April 1968
+    early_high_elo = base_table["elo2400_date"] < datetime.datetime(1968, 4, 1)
+
+    base_table = base_table[~early_high_elo]    # These players don't have useful data for our models.
+
+    # Players who became GMs after 1990
+    ninties_or_later_gms = base_table["gm_title_date"] >= datetime.datetime(1990, 1, 1)
+    
+    # Players who ever became a gm
+    ever_gms = base_table["gm_title_date"].notna()
+
+    # Male and female players
+    male_players = base_table["sex"] == "m"
+    female_players = base_table["sex"] == "f"
     
     # Players born after 2000
     born_after_2000 = base_table["birthday"] > datetime.datetime(2000, 1, 1)
 
+    # Players who hit gm before 15
+    gm_before_or_at_15 = (base_table["gm_title_date"].notna() & base_table["birthday"].notna()) & (base_table["gm_title_date"] < (base_table["birthday"] + pd.DateOffset(years=16)))
+
+    # Players who hit gm before 20
+    gm_before_or_at_20 = (base_table["gm_title_date"].notna() & base_table["birthday"].notna()) & (base_table["gm_title_date"] < (base_table["birthday"] + pd.DateOffset(years=21)))
+
+    # Players who hit 2700 elo
+    hit_2700 = base_table["elo2700_date"].notna()
+
+    # Players who didn't hit 2700 elo, but were gms
+    gm_but_not_2700 = ever_gms & base_table["elo2700_date"].isna()
+
+    # Players who were gms and hit 2700 <= 15 years old
+    gm_and_2700_before_or_at_15 = (ever_gms & hit_2700 & base_table["elo2700_date"].notna() & base_table["birthday"].notna()) & (base_table["elo2700_date"] < (base_table["birthday"] + pd.DateOffset(years=16)))
+
+    # Players who were gms and hit 2700 <= 20 years old
+    gm_and_2700_before_or_at_20 = (ever_gms & hit_2700 & base_table["elo2700_date"].notna() & base_table["birthday"].notna()) & (base_table["elo2700_date"] < (base_table["birthday"] + pd.DateOffset(years=21)))
+
+    models = [
+        TabularModelData("Paper Model 1", base_table[hit_2700], X_columns=["elo_2500_to_2600_days"], Y_columns=["elo2600_to_2700_days"]),
+        TabularModelData("Paper Model 2", base_table[hit_2700], X_columns=["elo_2400_to_2500_days", "elo_2500_to_2600_days"], Y_columns=["elo2600_to_2700_days"]),
+        TabularModelData("Paper Model 3", base_table[ever_gms], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 4", base_table[ever_gms & male_players], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 5", base_table[ever_gms & female_players], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 6", base_table[gm_before_or_at_15], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 7", base_table[gm_before_or_at_20], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 8", base_table[hit_2700], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 9", base_table[gm_but_not_2700], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 10", base_table[born_after_2000 & ever_gms], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 11", base_table[gm_and_2700_before_or_at_15], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 12", base_table[gm_and_2700_before_or_at_20], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+    ]
+
     return base_table
                               
 class PlayerPersonalInformation:
-    __slots__ = ['fideid', 'name', 'country', 'sex', 'birthday']
+    __slots__ = ['fideid', 'name', 'country', 'sex', 'birthday', 'birthday_datetime']
 
     def __init__(self, fideid, name, country, sex, birthday):
         self.fideid = fideid
@@ -615,7 +687,16 @@ class PlayerPersonalInformation:
         self.country = country
         self.sex = sex
         self.birthday = birthday
-
+        self.birthday_datetime = birthday_string_to_datetime(birthday) if birthday is not None else None
+    
+    def get_age_at_datetime(self, dt):
+        if self.birthday_datetime is None:
+            return None
+        
+        years_passed = dt.year - self.birthday_datetime.year
+        if (dt.month, dt.day) < (self.birthday_datetime.month, self.birthday_datetime.day):
+            years_passed -= 1
+        return years_passed
 
 if __name__ == "__main__":
     sqlite_db_path = pathlib.Path('data/standard/chess_elos.db')
