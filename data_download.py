@@ -71,14 +71,14 @@ def unpack_fide_standard_data():
     import zipfile
 
     standard_data_path = pathlib.Path('data/standard')
-    xml_files = set(standard_data_path.glob('*.xml'))
-    xml_files = set(f.name for f in xml_files)
+    existing_files = set(standard_data_path.glob('*.xml')) | set(standard_data_path.glob('*.txt')) | set(standard_data_path.glob('*.TXT'))
+    existing_files = set(f.name for f in existing_files)
 
 
     for zip_file in standard_data_path.glob('*.zip'):
         with zipfile.ZipFile(zip_file, 'r') as zip_ref:
             file_names = zip_ref.namelist()
-            if all(f in xml_files for f in file_names):
+            if all(f in existing_files for f in file_names):
                 continue
             zip_ref.extractall(standard_data_path)
             print(f'Unpacked: {zip_file.name}')
