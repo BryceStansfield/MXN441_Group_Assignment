@@ -191,6 +191,9 @@ class YearMonth:
         if self.year == other.year:
             return self.month < other.month
         return self.year < other.year
+    
+    def __le__(self, other):
+        return self < other or self.year == other.year and self.month == other.month
 
 def parse_new_format_monthly_data(file_path):
     tree = ET.parse(file_path)
@@ -602,13 +605,22 @@ class TabularModelData:
     def __repr__(self) -> str:
         return f"TabularModelData(model_name='{self.model_name}', n={len(self.data_table)})"
 
-def build_tables_for_paper_models(player_data):
+def build_tables_for_paper_models(player_data, return_condition_sets_and_personal_info = False):
     print("Building tables for paper models...")
     base_table = pd.DataFrame(columns=["fideid", "sex", "birthday", "elo2400_date", "elo2500_date", "elo2600_date", "elo2700_date", "elo2400_to_2500_days", "elo2500_to_2600_days", "elo2600_to_2700_days", "max_elo", "max_elo_date", "gm_title_date", "max_elo_age", "gm_title_age"])
 
+    personal_infos = {}
+    elo_first_dates_dict = {}
+
     for fideid, player_months in player_data.items():
         personal_info = get_player_personal_information(player_months)
+
+        if return_condition_sets_and_personal_info:
+            personal_infos[fideid] = personal_info
+
         elo_first_dates = PlayerEloFirstDates(player_months)
+        if return_condition_sets_and_personal_info:
+            elo_first_dates_dict[fideid] = elo_first_dates
 
         birthday_datetime = personal_info.birthday_datetime
 
@@ -630,8 +642,6 @@ def build_tables_for_paper_models(player_data):
             "gm_title_age": personal_info.get_age_at_datetime(elo_first_dates.first_gm_date.year_month_to_datetime()) if personal_info.birthday is not None and elo_first_dates.first_gm_date is not None else float('nan'),\
         }
     
-    print(base_table.dtypes)
-
     ### Filter columns
     # Players who were already 2400+ at the time of the first elo report in April 1968
     early_high_elo = base_table["elo2400_date"] < datetime.datetime(1968, 4, 1)
@@ -685,7 +695,61 @@ def build_tables_for_paper_models(player_data):
         TabularModelData("Paper Model 12", base_table[gm_before_20_and_2700 & gm_and_max_elo_ages_defined], X_columns=["gm_title_age"], Y_columns=["elo2600_to_2700_days"]),
     ]
 
+    condition_sets = {}
+    if return_condition_sets_and_personal_info:
+        condition_sets["Model1"] = set(base_table[hit_2700]["fideid"])
+        condition_sets["Model2"] = set(base_table[hit_2700 & ninties_or_later_gms]["fideid"])
+        condition_sets["Model3"] = set(base_table[gm_and_max_elo_ages_defined]["fideid"])
+        condition_sets["Model4"] = set(base_table[gm_and_max_elo_ages_defined & male_players]["fideid"])
+        condition_sets["Model5"] = set(base_table[gm_and_max_elo_ages_defined & female_players]["fideid"])
+        condition_sets["Model6"] = set(base_table[gm_before_or_at_15]["fideid"])
+        condition_sets["Model7"] = set(base_table[gm_before_or_at_20]["fideid"])
+        condition_sets["Model8"] = set(base_table[hit_2700]["fideid"])
+        condition_sets["Model9"] = set(base_table[gm_but_not_2700 & gm_and_max_elo_ages_defined]["fideid"])
+        condition_sets["Model10"] = set(base_table[born_after_2000 & ever_gms & gm_and_max_elo_ages_defined]["fideid"])
+        condition_sets["Model11"] = set(base_table[gm_before_15_and_2700 & gm_and_max_elo_ages_defined]["fideid"])
+        condition_sets["Model12"] = set(base_table[gm_before_20_and_2700 & gm_and_max_elo_ages_defined]["fideid"])
+
+        return condition_sets, personal_infos, elo_first_dates_dict
+
     return models
+
+def get_full_timeseries_model(player_data):
+    players_per_condition, personal_infos, elo_first_dates_dict = build_tables_for_paper_models(player_data, return_condition_sets_and_personal_info=True)
+
+    model_tables = {
+        f"Model{model_num}": pd.DataFrame(columns=["fideid", "time", "age_at_time", "elo", "games"]) for model_num in range(1, 13)
+    }
+
+    # Now, let's build out a pandas table for each model.
+    for fideid, player_months in player_data.items():
+        player_info = personal_infos[fideid]
+        elo_firsts = elo_first_dates_dict[fideid]
+
+        player_in_model = {i: fideid in players_per_condition[f"Model{i}"] for i in range(1, 13)}
+
+        for year_month, row in player_months.items():
+            if player_info.birthday_datetime is None:
+                break
+
+            # Unfortunately the best way to do this is a giant set of if statements.
+            if row["rating"] is None or row["games"] is None:
+                continue
+
+            rating = row["rating"]
+            games = row["games"]
+            time = year_month.year_month_to_datetime()
+
+            # For now we'll just do model 3
+            if player_in_model[3] and year_month <= elo_firsts.first_gm_date:
+                model_tables["Model3"].loc[len(model_tables["Model3"])] = {
+                    "fideid": fideid,
+                    "time": time,
+                    "age_at_time": player_info.get_age_at_datetime(time),
+                    "elo": rating,
+                    "games": games,
+                }
+    return model_tables
                               
 class PlayerPersonalInformation:
     __slots__ = ['fideid', 'name', 'country', 'sex', 'birthday', 'birthday_datetime']
@@ -710,5 +774,5 @@ class PlayerPersonalInformation:
 
 if __name__ == "__main__":    
     filtered_data = open_filtered_standard_data()
-    tables_for_models = build_tables_for_paper_models(filtered_data)
-    print(tables_for_models)
+    #tables_for_models = build_tables_for_paper_models(filtered_data)
+    print(get_full_timeseries_model(filtered_data)["Model3"].describe())
