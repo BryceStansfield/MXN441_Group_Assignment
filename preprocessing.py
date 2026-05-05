@@ -598,6 +598,9 @@ class TabularModelData:
         self.data_table = data_table
         self.X_columns = X_columns
         self.Y_columns = Y_columns
+    
+    def __repr__(self) -> str:
+        return f"TabularModelData(model_name='{self.model_name}', n={len(self.data_table)})"
 
 def build_tables_for_paper_models(player_data):
     print("Building tables for paper models...")
@@ -650,10 +653,10 @@ def build_tables_for_paper_models(player_data):
     born_after_2000 = base_table["birthday"] > datetime.datetime(2000, 1, 1)
 
     # Players who hit gm <= 15 years of age 
-    gm_before_or_at_15 = base_table["gm_title_age"] < 16
+    gm_before_or_at_15 = base_table["gm_title_age"] <= 15
 
     # Players who hit gm <= 20 years of age
-    gm_before_or_at_20 = base_table["gm_title_age"] < 21
+    gm_before_or_at_20 = base_table["gm_title_age"] <= 20
 
     # Players who hit 2700 elo
     hit_2700 = base_table["elo2700_date"].notna()
@@ -661,15 +664,15 @@ def build_tables_for_paper_models(player_data):
     # Players who didn't hit 2700 elo, but were gms
     gm_but_not_2700 = ever_gms & base_table["elo2700_date"].isna()
 
-    # Players who were gms <= 15 years of age and hit 2700 ever.
-    gm_before_15_and_2700 = (base_table["gm_title_age"] < 16) & (base_table["elo2700_date"].notna())
+    # Players who were gms <= 16 years of age and hit 2700 ever.
+    gm_before_15_and_2700 = (base_table["gm_title_age"] <= 16) & (base_table["elo2700_date"].notna())       # Note to self: Not sure why these are different, but mimics paper.
 
     # Players who were gms <= 20 years of age and hit 2700 ever.
-    gm_before_20_and_2700 = (base_table["gm_title_age"] < 21) & (base_table["elo2700_date"].notna())
+    gm_before_20_and_2700 = (base_table["gm_title_age"] <= 20) & (base_table["elo2700_date"].notna())
 
     models = [
         TabularModelData("Paper Model 1", base_table[hit_2700], X_columns=["elo2500_to_2600_days"], Y_columns=["elo2600_to_2700_days"]),
-        TabularModelData("Paper Model 2", base_table[hit_2700], X_columns=["elo2400_to_2500_days", "elo2500_to_2600_days"], Y_columns=["elo2600_to_2700_days"]),
+        TabularModelData("Paper Model 2", base_table[hit_2700 & ninties_or_later_gms], X_columns=["elo2400_to_2500_days", "elo2500_to_2600_days"], Y_columns=["elo2600_to_2700_days"]),     # Unable to reproduce n from the study.
         TabularModelData("Paper Model 3", base_table[gm_and_max_elo_ages_defined], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
         TabularModelData("Paper Model 4", base_table[gm_and_max_elo_ages_defined & male_players], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
         TabularModelData("Paper Model 5", base_table[gm_and_max_elo_ages_defined & female_players], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
@@ -678,8 +681,8 @@ def build_tables_for_paper_models(player_data):
         TabularModelData("Paper Model 8", base_table[hit_2700], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
         TabularModelData("Paper Model 9", base_table[gm_but_not_2700 & gm_and_max_elo_ages_defined], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
         TabularModelData("Paper Model 10", base_table[born_after_2000 & ever_gms & gm_and_max_elo_ages_defined], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
-        TabularModelData("Paper Model 11", base_table[gm_before_15_and_2700 & gm_and_max_elo_ages_defined], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
-        TabularModelData("Paper Model 12", base_table[gm_before_20_and_2700 & gm_and_max_elo_ages_defined], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 11", base_table[gm_before_15_and_2700 & gm_and_max_elo_ages_defined], X_columns=["gm_title_age"], Y_columns=["elo2600_to_2700_days"]),
+        TabularModelData("Paper Model 12", base_table[gm_before_20_and_2700 & gm_and_max_elo_ages_defined], X_columns=["gm_title_age"], Y_columns=["elo2600_to_2700_days"]),
     ]
 
     return models

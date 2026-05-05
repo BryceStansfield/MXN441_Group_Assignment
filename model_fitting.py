@@ -110,6 +110,7 @@ class PaperElasticModel:
         X = self.data.data_table[self.data.X_columns]
         Y = self.data.data_table[self.data.Y_columns].values.ravel()
 
+        # TODO: Choose better alphas.
         self.cv_model = SGridSearchCV(self.base_model,
                                       param_grid={"alpha": [0.0001, 0.001, 0.01, 0.1, 1, 10, 100],
                                                   "l1_ratio": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]},
@@ -195,11 +196,13 @@ def fit_all_paper_models(use_cache = False, verbose = True):
                     if verbose:
                         print(f"New best model for dataset {dataset.model_name}: {best_model_so_far} with CV RMSE: {best_rmse_so_far:.4f}")
             except Exception as e:
-                #print(f"Error fitting {model_class.__name__} on dataset {dataset.model_name} with X columns: {dataset.X_columns}, Y columns: {dataset.Y_columns}: {e}")
                 raise e
         
         best_models_per_dataset.append((dataset.model_name, best_model_so_far, best_rmse_so_far))
-    print(best_models_per_dataset)
+    
+    for i in range(len(best_models_per_dataset)):
+        model_name, best_model, best_rmse = best_models_per_dataset[i]
+        print(f"Best model for dataset {model_name} (n={len(data[i].data_table)}): {best_model} with CV RMSE: {best_rmse:.4f}")
 
 if __name__ == "__main__":
     fit_all_paper_models()
