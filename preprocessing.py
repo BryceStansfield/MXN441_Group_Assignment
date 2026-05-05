@@ -601,7 +601,7 @@ class TabularModelData:
 
 def build_tables_for_paper_models(player_data):
     print("Building tables for paper models...")
-    base_table = pd.DataFrame(columns=["fideid", "sex", "birthday", "elo2400_date", "elo2500_date", "elo2600_date", "elo2700_date", "elo2800_date", "elo2400_to_2500_days", "elo2500_to_2600_days", "elo2600_to_2700_days", "max_elo", "max_elo_date", "gm_title_date", "max_elo_age", "gm_title_age"])
+    base_table = pd.DataFrame(columns=["fideid", "sex", "birthday", "elo2400_date", "elo2500_date", "elo2600_date", "elo2700_date", "elo2400_to_2500_days", "elo2500_to_2600_days", "elo2600_to_2700_days", "max_elo", "max_elo_date", "gm_title_date", "max_elo_age", "gm_title_age"])
 
     for fideid, player_months in player_data.items():
         personal_info = get_player_personal_information(player_months)
@@ -617,16 +617,18 @@ def build_tables_for_paper_models(player_data):
             "elo2500_date": elo_first_dates.first_elo_dates[2500].year_month_to_datetime() if elo_first_dates.first_elo_dates[2500] is not None else pd.NaT,
             "elo2600_date": elo_first_dates.first_elo_dates[2600].year_month_to_datetime() if elo_first_dates.first_elo_dates[2600] is not None else pd.NaT,
             "elo2700_date": elo_first_dates.first_elo_dates[2700].year_month_to_datetime() if elo_first_dates.first_elo_dates[2700] is not None else pd.NaT,
-            "elo2400_to_2500_days": (elo_first_dates.first_elo_dates[2500].year_month_to_datetime() - elo_first_dates.first_elo_dates[2400].year_month_to_datetime()).days if elo_first_dates.first_elo_dates[2500] is not None else pd.NaT,
-            "elo2500_to_2600_days": (elo_first_dates.first_elo_dates[2600].year_month_to_datetime() - elo_first_dates.first_elo_dates[2500].year_month_to_datetime()).days if elo_first_dates.first_elo_dates[2600] is not None else pd.NaT,
-            "elo2600_to_2700_days": (elo_first_dates.first_elo_dates[2700].year_month_to_datetime() - elo_first_dates.first_elo_dates[2600].year_month_to_datetime()).days if elo_first_dates.first_elo_dates[2700] is not None else pd.NaT,
+            "elo2400_to_2500_days": (elo_first_dates.first_elo_dates[2500].year_month_to_datetime() - elo_first_dates.first_elo_dates[2400].year_month_to_datetime()).days if elo_first_dates.first_elo_dates[2500] is not None else float('nan'),
+            "elo2500_to_2600_days": (elo_first_dates.first_elo_dates[2600].year_month_to_datetime() - elo_first_dates.first_elo_dates[2500].year_month_to_datetime()).days if elo_first_dates.first_elo_dates[2600] is not None else float('nan'),
+            "elo2600_to_2700_days": (elo_first_dates.first_elo_dates[2700].year_month_to_datetime() - elo_first_dates.first_elo_dates[2600].year_month_to_datetime()).days if elo_first_dates.first_elo_dates[2700] is not None else float('nan'),
             "max_elo": elo_first_dates.MAX_ELO,
             "max_elo_date": elo_first_dates.MAX_ELO_DATE.year_month_to_datetime() if elo_first_dates.MAX_ELO_DATE is not None else pd.NaT,
             "gm_title_date": elo_first_dates.first_gm_date.year_month_to_datetime() if elo_first_dates.first_gm_date is not None else pd.NaT,
-            "max_elo_age": personal_info.get_age_at_datetime(elo_first_dates.MAX_ELO_DATE.year_month_to_datetime()) if personal_info.birthday is not None and elo_first_dates.MAX_ELO_DATE is not None else None,
-            "gm_title_age": personal_info.get_age_at_datetime(elo_first_dates.first_gm_date.year_month_to_datetime()) if personal_info.birthday is not None and elo_first_dates.first_gm_date is not None else None,\
+            "max_elo_age": personal_info.get_age_at_datetime(elo_first_dates.MAX_ELO_DATE.year_month_to_datetime()) if personal_info.birthday is not None and elo_first_dates.MAX_ELO_DATE is not None else float('nan'),
+            "gm_title_age": personal_info.get_age_at_datetime(elo_first_dates.first_gm_date.year_month_to_datetime()) if personal_info.birthday is not None and elo_first_dates.first_gm_date is not None else float('nan'),\
         }
     
+    print(base_table.dtypes)
+
     ### Filter columns
     # Players who were already 2400+ at the time of the first elo report in April 1968
     early_high_elo = base_table["elo2400_date"] < datetime.datetime(1968, 4, 1)
@@ -647,11 +649,11 @@ def build_tables_for_paper_models(player_data):
     # Players born after 2000
     born_after_2000 = base_table["birthday"] > datetime.datetime(2000, 1, 1)
 
-    # Players who hit gm before 15
-    gm_before_or_at_15 = base_table["gm_title_age"] <= 15
+    # Players who hit gm <= 15 years of age 
+    gm_before_or_at_15 = base_table["gm_title_age"] < 16
 
-    # Players who hit gm before 20
-    gm_before_or_at_20 = base_table["gm_title_age"] <= 20
+    # Players who hit gm <= 20 years of age
+    gm_before_or_at_20 = base_table["gm_title_age"] < 21
 
     # Players who hit 2700 elo
     hit_2700 = base_table["elo2700_date"].notna()
@@ -659,11 +661,11 @@ def build_tables_for_paper_models(player_data):
     # Players who didn't hit 2700 elo, but were gms
     gm_but_not_2700 = ever_gms & base_table["elo2700_date"].isna()
 
-    # Players who were gms before 15 and hit 2700 ever.
-    gm_before_15_and_2700 = (base_table["gm_title_age"] <= 15) & (base_table["elo2700_date"].notna())
+    # Players who were gms <= 15 years of age and hit 2700 ever.
+    gm_before_15_and_2700 = (base_table["gm_title_age"] < 16) & (base_table["elo2700_date"].notna())
 
-    # Players who were gms before 20 and hit 2700 ever.
-    gm_before_20_and_2700 = (base_table["gm_title_age"] <= 20) & (base_table["elo2700_date"].notna())
+    # Players who were gms <= 20 years of age and hit 2700 ever.
+    gm_before_20_and_2700 = (base_table["gm_title_age"] < 21) & (base_table["elo2700_date"].notna())
 
     models = [
         TabularModelData("Paper Model 1", base_table[hit_2700], X_columns=["elo2500_to_2600_days"], Y_columns=["elo2600_to_2700_days"]),
@@ -695,11 +697,12 @@ class PlayerPersonalInformation:
     
     def get_age_at_datetime(self, dt):
         if self.birthday_datetime is None:
-            return None
+            return float('nan')
         
         years_passed = dt.year - self.birthday_datetime.year
         if (dt.month, dt.day) < (self.birthday_datetime.month, self.birthday_datetime.day):
             years_passed -= 1
+        years_passed += dt.timetuple().tm_yday / 366  # Technically a slight underestimation for most players, but avoids leap year issues.
         return years_passed
 
 if __name__ == "__main__":    

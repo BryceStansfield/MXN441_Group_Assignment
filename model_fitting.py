@@ -18,7 +18,7 @@ class PaperLinearModel:
 
     def fit(self):
         X = self.data.data_table[self.data.X_columns]
-        Y = self.data.data_table[self.data.Y_columns]
+        Y = self.data.data_table[self.data.Y_columns].values.ravel()
         
         self.cv_model = SGridSearchCV(self.base_model, param_grid={}, cv=5, scoring="neg_root_mean_squared_error")  # Here we just use GridSearchCV as a quick and easy way to get CV'd RMSE.
         self.cv_model.fit(X, Y)
@@ -36,7 +36,7 @@ class PaperGradientBoostingModel:
 
     def fit(self):
         X = self.data.data_table[self.data.X_columns]
-        Y = self.data.data_table[self.data.Y_columns]
+        Y = self.data.data_table[self.data.Y_columns].values.ravel()
         
         self.cv_model = SGridSearchCV(self.base_model,
                                       param_grid={"n_estimators": [10, 20, 50, 100, 200, 500, 1000],
@@ -60,7 +60,7 @@ class PaperAdaBoostModel:
 
     def fit(self):
         X = self.data.data_table[self.data.X_columns]
-        Y = self.data.data_table[self.data.Y_columns]
+        Y = self.data.data_table[self.data.Y_columns].values.ravel()
         
         self.cv_model = SGridSearchCV(self.base_model,
                                       param_grid={"n_estimators": [10, 20, 50, 100, 200, 500, 1000],
@@ -79,11 +79,11 @@ class PaperAdaBoostModel:
 class PaperMLPModel:
     def __init__(self, data: TabularModelData):
         self.data = data
-        self.base_model = MLPRegressor(max_iter = 1000, random_state=1)
+        self.base_model = MLPRegressor(max_iter = 10000, random_state=1)
 
     def fit(self):
         X = self.data.data_table[self.data.X_columns]
-        Y = self.data.data_table[self.data.Y_columns]
+        Y = self.data.data_table[self.data.Y_columns].values.ravel()
         
         self.cv_model = SGridSearchCV(self.base_model,
                                       param_grid={"hidden_layer_sizes": [(10,), (50,), (100,), (10, 10), (50, 50), (100, 100), (10, 10, 10), (50, 50, 50), (100, 100, 100)],
@@ -104,11 +104,11 @@ class PaperElasticModel:
     # Note that the paper l1 model is a subset of this. l2 isn't, since this isn't numerically stable for l1_ratio = 0.
     def __init__(self, data: TabularModelData):
         self.data = data
-        self.base_model = ElasticNet(max_iter=1000, random_state=1)
+        self.base_model = ElasticNet(max_iter=10000, random_state=1)
     
     def fit(self):
         X = self.data.data_table[self.data.X_columns]
-        Y = self.data.data_table[self.data.Y_columns]
+        Y = self.data.data_table[self.data.Y_columns].values.ravel()
 
         self.cv_model = SGridSearchCV(self.base_model,
                                       param_grid={"alpha": [0.0001, 0.001, 0.01, 0.1, 1, 10, 100],
@@ -127,11 +127,11 @@ class PaperElasticModel:
 class PaperRidgeModel:
     def __init__(self, data: TabularModelData):
         self.data = data
-        self.base_model = Ridge(max_iter=1000, random_state=1)
+        self.base_model = Ridge(max_iter=10000, random_state=1)
     
     def fit(self):
         X = self.data.data_table[self.data.X_columns]
-        Y = self.data.data_table[self.data.Y_columns]
+        Y = self.data.data_table[self.data.Y_columns].values.ravel()
 
         self.cv_model = SGridSearchCV(self.base_model,
                                       param_grid={"alpha": [0.0001, 0.001, 0.01, 0.1, 1, 10, 100]},
@@ -147,7 +147,7 @@ class PaperRidgeModel:
         return self.cv_model.best_params_
         
 
-def fit_all_paper_models(verbose = True):
+def fit_all_paper_models(use_cache = False, verbose = True):
     data = preprocessing.build_tables_for_paper_models(preprocessing.open_filtered_standard_data())
 
     model_classes = [PaperLinearModel, PaperGradientBoostingModel, PaperAdaBoostModel, PaperMLPModel, PaperElasticModel, PaperRidgeModel]
@@ -166,7 +166,7 @@ def fit_all_paper_models(verbose = True):
         for model_class in model_classes:
             try:
                 model_filepath = cache_directory / f"{dataset.model_name}_{model_class.__name__}.pkl"
-                if model_filepath.exists():
+                if use_cache and model_filepath.exists():
                     if verbose:
                         print(f"Loading cached model for {model_class.__name__} on dataset {dataset.model_name} from {model_filepath}...")
                     
@@ -181,8 +181,9 @@ def fit_all_paper_models(verbose = True):
                         print(f"Fitting {model_class.__name__} on dataset {dataset.model_name} with X columns: {dataset.X_columns}, Y columns: {dataset.Y_columns}...")
                     
                     model.fit()
-                    with open(model_filepath, "wb") as f:
-                        pickle.dump(model, f)
+                    if use_cache:
+                        with open(model_filepath, "wb") as f:
+                            pickle.dump(model, f)
 
                     if verbose:
                         print(f"Finished fitting {model_class.__name__} on dataset {dataset.model_name}. CV RMSE: {model.get_cv_rmse():.4f}, Best Params: {model.get_best_params()}")
@@ -194,7 +195,8 @@ def fit_all_paper_models(verbose = True):
                     if verbose:
                         print(f"New best model for dataset {dataset.model_name}: {best_model_so_far} with CV RMSE: {best_rmse_so_far:.4f}")
             except Exception as e:
-                print(f"Error fitting {model_class.__name__} on dataset {dataset.model_name} with X columns: {dataset.X_columns}, Y columns: {dataset.Y_columns}: {e}")
+                #print(f"Error fitting {model_class.__name__} on dataset {dataset.model_name} with X columns: {dataset.X_columns}, Y columns: {dataset.Y_columns}: {e}")
+                raise e
         
         best_models_per_dataset.append((dataset.model_name, best_model_so_far, best_rmse_so_far))
     print(best_models_per_dataset)
