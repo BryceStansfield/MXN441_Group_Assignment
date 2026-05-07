@@ -545,18 +545,24 @@ def open_filtered_standard_data(sqlite_db_path = pathlib.Path("data/standard/che
     high_elo_data = high_elo_player_data(cursor, cutoff_year_month, elo_threshold)
     return high_elo_data
 
-class PlayerEloFirstDates:
-    ELO_CUTOFFS = [2400, 2500, 2600, 2700, 2800]
+class PlayerEloMetadata:
+    ELO_CUTOFFS = [2000, 2400, 2500, 2600, 2700, 2800]
     
     MAX_ELO = 0
     MAX_ELO_DATE = YearMonth(1900, 1)
 
     def __init__(self, player_months: dict[YearMonth, object]):
         self.first_elo_dates = {cutoff: None for cutoff in self.ELO_CUTOFFS}
+        abs_elo_changes = {cutoff: [] for cutoff in self.ELO_CUTOFFS}
         self.first_gm_date = None
 
+        games_played = []
+        last_elo = 0
+        last_ym = YearMonth(1900, 1)
         for ym in sorted(player_months.keys()):
             row = player_months[ym]
+
+            already_passed_2000 = self.first_elo_dates[2000] is not None    # We need to track this for later. Since we don't want to divide by zero.
 
             if row["rating"] is None:
                 continue
@@ -570,9 +576,27 @@ class PlayerEloFirstDates:
             if row["rating"] > self.MAX_ELO:
                 self.MAX_ELO = row["rating"]
                 self.MAX_ELO_DATE = ym
+            
+            if already_passed_2000:
+                num_months = (ym.year - last_ym.year) * 12 + (ym.month - last_ym.month)
+                for elo in self.ELO_CUTOFFS:
+                    if self.first_elo_dates[elo] is None:
+                        abs_elo_changes[elo].append(abs(row["rating"] - last_elo)/num_months)
+                
+                if row["games"] is not None:    # Early data doesn't include # games played.
+                    games_played.append(row["games"]/num_months)
+            
+            last_elo = row["rating"]
+            last_ym = ym
+        
+        self.avg_abs_elo_changes_per_month = {
+            elo: sum(changes)/len(changes) if len(changes) > 0 and self.first_elo_dates[elo] is not None else None
+            for elo, changes in abs_elo_changes.items()
+        }
+        self.avg_games_per_month_since_2000 = sum(games_played)/len(games_played) if len(games_played) > 0 else None
 
     def __repr__(self) -> str:
-        return f"PlayerEloFirstDates(first_elo_dates={self.first_elo_dates}, first_gm_date={self.first_gm_date})"
+        return f"PlayerEloMetadata(first_elo_dates={self.first_elo_dates}, first_gm_date={self.first_gm_date})"
 
 def get_player_personal_information(player_months: dict[YearMonth, object]):
     # We take this from the latest month we have data for.
@@ -607,7 +631,28 @@ class TabularModelData:
 
 def build_tables_for_paper_models(player_data, return_condition_sets_and_personal_info = False):
     print("Building tables for paper models...")
-    base_table = pd.DataFrame(columns=["fideid", "sex", "birthday", "elo2400_date", "elo2500_date", "elo2600_date", "elo2700_date", "elo2400_to_2500_days", "elo2500_to_2600_days", "elo2600_to_2700_days", "max_elo", "max_elo_date", "gm_title_date", "max_elo_age", "gm_title_age"])
+    base_table = pd.DataFrame(columns=[
+        "fideid",
+        "sex",
+        "birthday",
+        "elo2400_date",
+        "elo2500_date",
+        "elo2600_date",
+        "elo2700_date",
+        "elo2400_to_2500_days",
+        "elo2500_to_2600_days",
+        "elo2600_to_2700_days",
+        "max_elo",
+        "max_elo_date",
+        "gm_title_date",
+        "max_elo_age",
+        "gm_title_age",
+
+        # Experimental new features.
+        # 2000 chosen as a somewhat arbitrary milestone, excluding early play.
+        "2000_2500_avg_abs_elo_change_per_month",
+        "2000_2600_avg_abs_elo_change_per_month",
+        "avg_games_per_month_since_2000"])
 
     personal_infos = {}
     elo_first_dates_dict = {}
@@ -618,7 +663,7 @@ def build_tables_for_paper_models(player_data, return_condition_sets_and_persona
         if return_condition_sets_and_personal_info:
             personal_infos[fideid] = personal_info
 
-        elo_first_dates = PlayerEloFirstDates(player_months)
+        elo_first_dates = PlayerEloMetadata(player_months)
         if return_condition_sets_and_personal_info:
             elo_first_dates_dict[fideid] = elo_first_dates
 
@@ -639,7 +684,10 @@ def build_tables_for_paper_models(player_data, return_condition_sets_and_persona
             "max_elo_date": elo_first_dates.MAX_ELO_DATE.year_month_to_datetime() if elo_first_dates.MAX_ELO_DATE is not None else pd.NaT,
             "gm_title_date": elo_first_dates.first_gm_date.year_month_to_datetime() if elo_first_dates.first_gm_date is not None else pd.NaT,
             "max_elo_age": personal_info.get_age_at_datetime(elo_first_dates.MAX_ELO_DATE.year_month_to_datetime()) if personal_info.birthday is not None and elo_first_dates.MAX_ELO_DATE is not None else float('nan'),
-            "gm_title_age": personal_info.get_age_at_datetime(elo_first_dates.first_gm_date.year_month_to_datetime()) if personal_info.birthday is not None and elo_first_dates.first_gm_date is not None else float('nan'),\
+            "gm_title_age": personal_info.get_age_at_datetime(elo_first_dates.first_gm_date.year_month_to_datetime()) if personal_info.birthday is not None and elo_first_dates.first_gm_date is not None else float('nan'),
+            "2000_2500_avg_abs_elo_change_per_month": elo_first_dates.avg_abs_elo_changes_per_month[2500] if elo_first_dates.avg_abs_elo_changes_per_month[2500] is not None else 0,
+            "2000_2600_avg_abs_elo_change_per_month": elo_first_dates.avg_abs_elo_changes_per_month[2600] if elo_first_dates.avg_abs_elo_changes_per_month[2600] is not None else 0,
+            "avg_games_per_month_since_2000": elo_first_dates.avg_games_per_month_since_2000 if elo_first_dates.avg_games_per_month_since_2000 is not None else 0,
         }
     
     ### Filter columns
@@ -682,6 +730,9 @@ def build_tables_for_paper_models(player_data, return_condition_sets_and_persona
 
     models = [
         TabularModelData("Paper Model 1", base_table[hit_2700], X_columns=["elo2500_to_2600_days"], Y_columns=["elo2600_to_2700_days"]),
+        TabularModelData("Paper Model 1 Bryce Modification 1", base_table[hit_2700], X_columns=["elo2400_to_2500_days", "2000_2600_avg_abs_elo_change_per_month"], Y_columns=["elo2600_to_2700_days"]),
+        TabularModelData("Paper Model 1 Bryce Modification 2", base_table[hit_2700], X_columns=["elo2400_to_2500_days", "avg_games_per_month_since_2000"], Y_columns=["elo2600_to_2700_days"]),
+        TabularModelData("Paper Model 1 Bryce Modification 1+2", base_table[hit_2700], X_columns=["elo2400_to_2500_days", "2000_2600_avg_abs_elo_change_per_month", "avg_games_per_month_since_2000"], Y_columns=["elo2600_to_2700_days"]),
         TabularModelData("Paper Model 2", base_table[hit_2700 & ninties_or_later_gms], X_columns=["elo2400_to_2500_days", "elo2500_to_2600_days"], Y_columns=["elo2600_to_2700_days"]),     # Unable to reproduce n from the study.
         TabularModelData("Paper Model 3", base_table[gm_and_max_elo_ages_defined], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
         TabularModelData("Paper Model 4", base_table[gm_and_max_elo_ages_defined & male_players], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
