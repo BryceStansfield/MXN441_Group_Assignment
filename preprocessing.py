@@ -765,12 +765,16 @@ def build_tables_for_paper_models(player_data, return_condition_sets_and_persona
 
     return models
 
-def get_full_timeseries_model(player_data):
+def get_full_timeseries_model(elo_cutoff):
+    player_data = open_filtered_standard_data(elo_threshold=elo_cutoff)
+
     players_per_condition, personal_infos, elo_first_dates_dict = build_tables_for_paper_models(player_data, return_condition_sets_and_personal_info=True)
 
     model_tables = {
         f"Model{model_num}": pd.DataFrame(columns=["fideid", "time", "age_at_time", "elo", "games"]) for model_num in range(1, 13)
     }
+
+    model_tables[f"All ever > {elo_cutoff} players"] = pd.DataFrame(columns=["fideid", "time", "age_at_time", "elo", "games"])
 
     # Now, let's build out a pandas table for each model.
     for fideid, player_months in player_data.items():
@@ -791,15 +795,20 @@ def get_full_timeseries_model(player_data):
             games = row["games"]
             time = year_month.year_month_to_datetime()
 
-            # For now we'll just do model 3
-            if player_in_model[3] and year_month <= elo_firsts.first_gm_date:
-                model_tables["Model3"].loc[len(model_tables["Model3"])] = {
+            # We always add data to the all players table.
+            pandas_row = {
                     "fideid": fideid,
                     "time": time,
                     "age_at_time": player_info.get_age_at_datetime(time),
                     "elo": rating,
                     "games": games,
-                }
+            }
+            
+            model_tables[f"All ever > {elo_cutoff} players"].loc[len(model_tables[f"All ever > {elo_cutoff} players"])] = pandas_row
+
+            # For now we'll just do model 3
+            if player_in_model[3] and year_month <= elo_firsts.first_gm_date:
+                model_tables["Model3"].loc[len(model_tables["Model3"])] = pandas_row
     return model_tables
                               
 class PlayerPersonalInformation:
