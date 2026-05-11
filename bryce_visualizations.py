@@ -68,6 +68,8 @@ def age_vs_elo_heatmap(player_data, elo_threshold = 2000):
 def games_played_vs_age(player_data, elo_threshold):
     ages = []
     games_played = []
+    activity_ages = []
+    any_activity = []
 
     for fideid, player_months in player_data.items():
         personal_info = preprocessing.get_player_personal_information(player_months)
@@ -85,9 +87,17 @@ def games_played_vs_age(player_data, elo_threshold):
                 age = personal_info.get_age_at_datetime(sorted_year_months[i].year_month_to_datetime())
                 games = cur_month["games"]
 
-                if age >= 10 and age <= 70 and games is not None and games < 50 and games != 0:
-                    ages.append(age)
-                    games_played.append(games)
+                if age >= 10 and age <= 70:
+                    if games is not None and games < 50 and games != 0:
+                        ages.append(age)
+                        games_played.append(games)
+                    
+                    activity_ages.append(age)
+                    if games is not None and games != 0:
+                        any_activity.append(1)
+                    else:
+                        any_activity.append(0)
+
     
     plt.xlabel("Age")
     plt.ylabel("Games Played")
@@ -96,9 +106,17 @@ def games_played_vs_age(player_data, elo_threshold):
     plt.savefig(f"visualizations/games_played_vs_age_{elo_threshold}.png")
     plt.show()
 
+    plt.xlabel("Age")
+    plt.ylabel("Any Games Played")
+    plt.title(f"Any Games Played vs Age (Players with Max Elo >= {elo_threshold})")
+    plt.hist2d(activity_ages, any_activity, bins=30, cmap='Blues')
+    plt.savefig(f"visualizations/any_games_played_vs_age_{elo_threshold}.png")
+    plt.show()
+
 if __name__ == "__main__":
     for elo_threshold in [2300, 2400, 2500, 2600, 2700]:
         player_data = preprocessing.open_filtered_standard_data(elo_threshold=elo_threshold)
+        games_played_vs_age(player_data, elo_threshold=elo_threshold)
         age_vs_elo_heatmap(player_data, elo_threshold=elo_threshold)
         age_vs_month_normalized_elo_diff_scatter_plot(player_data, min_elo_threshold=elo_threshold)
-        games_played_vs_age(player_data, elo_threshold=elo_threshold)
+        
