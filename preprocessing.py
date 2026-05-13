@@ -1,9 +1,6 @@
 import pathlib
-from urllib import response
 import xml.etree.ElementTree as ET
-import pickle
 import bs4
-import multiprocessing
 import sqlite3
 import datetime
 import pandas as pd
@@ -629,7 +626,7 @@ class TabularModelData:
     def __repr__(self) -> str:
         return f"TabularModelData(model_name='{self.model_name}', n={len(self.data_table)})"
 
-def build_tables_for_paper_models(player_data, return_condition_sets_and_personal_info = False):
+def build_tables_for_paper_models(player_data, cutoff_date: datetime.datetime = datetime.datetime(2024,1,1), return_condition_sets_and_personal_info = False):
     print("Building tables for paper models...")
     base_table = pd.DataFrame(columns=[
         "fideid",
@@ -728,42 +725,44 @@ def build_tables_for_paper_models(player_data, return_condition_sets_and_persona
     # Players who were gms <= 20 years of age and hit 2700 ever.
     gm_before_20_and_2700 = (base_table["gm_title_age"] <= 20) & (base_table["elo2700_date"].notna())
 
+    # Max ELO valid (not within past year)
+    max_elo_valid = base_table["max_elo_date"] <= cutoff_date - datetime.timedelta(days=365)
+
     models = [
         TabularModelData("Paper Model 1", base_table[hit_2700], X_columns=["elo2500_to_2600_days"], Y_columns=["elo2600_to_2700_days"]),
-        TabularModelData("Paper Model 1 Bryce Modification 1", base_table[hit_2700], X_columns=["elo2400_to_2500_days", "2000_2600_avg_abs_elo_change_per_month"], Y_columns=["elo2600_to_2700_days"]),
-        TabularModelData("Paper Model 1 Bryce Modification 2", base_table[hit_2700], X_columns=["elo2400_to_2500_days", "avg_games_per_month_since_2000"], Y_columns=["elo2600_to_2700_days"]),
-        TabularModelData("Paper Model 1 Bryce Modification 1+2", base_table[hit_2700], X_columns=["elo2400_to_2500_days", "2000_2600_avg_abs_elo_change_per_month", "avg_games_per_month_since_2000"], Y_columns=["elo2600_to_2700_days"]),
         TabularModelData("Paper Model 2", base_table[hit_2700 & ninties_or_later_gms], X_columns=["elo2400_to_2500_days", "elo2500_to_2600_days"], Y_columns=["elo2600_to_2700_days"]),     # Unable to reproduce n from the study.
-        TabularModelData("Paper Model 3", base_table[gm_and_max_elo_ages_defined], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
-        TabularModelData("Paper Model 4", base_table[gm_and_max_elo_ages_defined & male_players], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
-        TabularModelData("Paper Model 5", base_table[gm_and_max_elo_ages_defined & female_players], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
-        TabularModelData("Paper Model 6", base_table[gm_before_or_at_15], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
-        TabularModelData("Paper Model 7", base_table[gm_before_or_at_20], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
-        TabularModelData("Paper Model 8", base_table[hit_2700], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
-        TabularModelData("Paper Model 9", base_table[gm_but_not_2700 & gm_and_max_elo_ages_defined], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
-        TabularModelData("Paper Model 10", base_table[born_after_2000 & ever_gms & gm_and_max_elo_ages_defined], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
-        TabularModelData("Paper Model 11", base_table[gm_before_15_and_2700 & gm_and_max_elo_ages_defined], X_columns=["gm_title_age"], Y_columns=["elo2600_to_2700_days"]),
-        TabularModelData("Paper Model 12", base_table[gm_before_20_and_2700 & gm_and_max_elo_ages_defined], X_columns=["gm_title_age"], Y_columns=["elo2600_to_2700_days"]),
+        TabularModelData("Paper Model 3", base_table[gm_and_max_elo_ages_defined & max_elo_valid], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 4", base_table[gm_and_max_elo_ages_defined & male_players & max_elo_valid], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 5", base_table[gm_and_max_elo_ages_defined & female_players & max_elo_valid], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 6", base_table[gm_before_or_at_15 & max_elo_valid], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 7", base_table[gm_before_or_at_20 & max_elo_valid], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 8", base_table[hit_2700 & max_elo_valid], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 9", base_table[gm_but_not_2700 & gm_and_max_elo_ages_defined & max_elo_valid], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 10", base_table[born_after_2000 & ever_gms & gm_and_max_elo_ages_defined & max_elo_valid], X_columns=["gm_title_age"], Y_columns=["max_elo_age"]),
+        TabularModelData("Paper Model 11", base_table[gm_before_15_and_2700 & gm_and_max_elo_ages_defined & max_elo_valid], X_columns=["gm_title_age"], Y_columns=["elo2600_to_2700_days"]),
+        TabularModelData("Paper Model 12", base_table[gm_before_20_and_2700 & gm_and_max_elo_ages_defined & max_elo_valid], X_columns=["gm_title_age"], Y_columns=["elo2600_to_2700_days"]),
     ]
+
+    vol_models = [TabularModelData(f"{model.model_name} + vol", model.data_table, X_columns=model.X_columns + ["2000_2600_avg_abs_elo_change_per_month"], Y_columns=model.Y_columns) for model in models]
 
     condition_sets = {}
     if return_condition_sets_and_personal_info:
         condition_sets["Model1"] = set(base_table[hit_2700]["fideid"])
         condition_sets["Model2"] = set(base_table[hit_2700 & ninties_or_later_gms]["fideid"])
-        condition_sets["Model3"] = set(base_table[gm_and_max_elo_ages_defined]["fideid"])
-        condition_sets["Model4"] = set(base_table[gm_and_max_elo_ages_defined & male_players]["fideid"])
-        condition_sets["Model5"] = set(base_table[gm_and_max_elo_ages_defined & female_players]["fideid"])
-        condition_sets["Model6"] = set(base_table[gm_before_or_at_15]["fideid"])
-        condition_sets["Model7"] = set(base_table[gm_before_or_at_20]["fideid"])
-        condition_sets["Model8"] = set(base_table[hit_2700]["fideid"])
-        condition_sets["Model9"] = set(base_table[gm_but_not_2700 & gm_and_max_elo_ages_defined]["fideid"])
-        condition_sets["Model10"] = set(base_table[born_after_2000 & ever_gms & gm_and_max_elo_ages_defined]["fideid"])
-        condition_sets["Model11"] = set(base_table[gm_before_15_and_2700 & gm_and_max_elo_ages_defined]["fideid"])
-        condition_sets["Model12"] = set(base_table[gm_before_20_and_2700 & gm_and_max_elo_ages_defined]["fideid"])
+        condition_sets["Model3"] = set(base_table[gm_and_max_elo_ages_defined & max_elo_valid]["fideid"])
+        condition_sets["Model4"] = set(base_table[gm_and_max_elo_ages_defined & male_players & max_elo_valid]["fideid"])
+        condition_sets["Model5"] = set(base_table[gm_and_max_elo_ages_defined & female_players & max_elo_valid]["fideid"])
+        condition_sets["Model6"] = set(base_table[gm_before_or_at_15 & max_elo_valid]["fideid"])
+        condition_sets["Model7"] = set(base_table[gm_before_or_at_20 & max_elo_valid]["fideid"])
+        condition_sets["Model8"] = set(base_table[hit_2700 & max_elo_valid]["fideid"])
+        condition_sets["Model9"] = set(base_table[gm_but_not_2700 & gm_and_max_elo_ages_defined & max_elo_valid]["fideid"])
+        condition_sets["Model10"] = set(base_table[born_after_2000 & ever_gms & gm_and_max_elo_ages_defined & max_elo_valid]["fideid"])
+        condition_sets["Model11"] = set(base_table[gm_before_15_and_2700 & gm_and_max_elo_ages_defined & max_elo_valid]["fideid"])
+        condition_sets["Model12"] = set(base_table[gm_before_20_and_2700 & gm_and_max_elo_ages_defined & max_elo_valid]["fideid"])
 
         return condition_sets, personal_infos, elo_first_dates_dict
 
-    return models
+    return models + vol_models
 
 def get_full_timeseries_model(elo_cutoff):
     player_data = open_filtered_standard_data(elo_threshold=elo_cutoff)

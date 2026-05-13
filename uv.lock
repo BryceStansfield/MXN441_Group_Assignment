@@ -1496,6 +1496,7 @@ dependencies = [
     { name = "seaborn" },
     { name = "statsforecast", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' and sys_platform == 'win32'" },
     { name = "statsforecast", version = "2.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or sys_platform != 'win32'" },
+    { name = "statsmodels" },
     { name = "torch" },
     { name = "xgboost" },
 ]
@@ -1515,6 +1516,7 @@ requires-dist = [
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "statsforecast", specifier = ">=2.0.2" },
+    { name = "statsmodels", specifier = ">=0.14.6" },
     { name = "torch", specifier = ">=2.11.0" },
     { name = "xgboost", specifier = ">=3.2.0" },
 ]
