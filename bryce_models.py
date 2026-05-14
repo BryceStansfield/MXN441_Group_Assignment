@@ -1,10 +1,9 @@
 import torch
 
-from preprocessing import build_tables_for_paper_models, get_full_timeseries_model, open_filtered_standard_data
+from preprocessing import get_full_timeseries_model
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
-import torch.nn.utils.rnn as rnn_utils
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import PredictionErrorDisplay
 import matplotlib.pyplot as plt
@@ -12,6 +11,16 @@ from statsmodels.tsa.stattools import acf, pacf
 import pathlib
 from sklearn.metrics import mean_squared_error
 from statsmodels.tsa.api import SimpleExpSmoothing
+
+import lightning.pytorch as pl
+from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor
+from lightning.pytorch.loggers import TensorBoardLogger
+
+from pytorch_forecasting import Baseline, TemporalFusionTransformer, TimeSeriesDataSet
+from pytorch_forecasting.data import GroupNormalizer
+from pytorch_forecasting.metrics import MAE, SMAPE, PoissonLoss, QuantileLoss
+from pytorch_forecasting.models.temporal_fusion_transformer.tuning import optimize_hyperparameters
+
 import warnings
 
 ELO_CUTOFF = 2500
@@ -42,23 +51,6 @@ def split_timeseries_data_table_into_train_and_test(df: pd.DataFrame, test_ratio
 
     return df[df["fideid"].isin(train_fideids)].reset_index(drop=True), df[df["fideid"].isin(validation_fideids)].reset_index(drop=True), df[df["fideid"].isin(test_fideids)].reset_index(drop=True)
 
-def turn_df_into_lstm_windows(df: pd.DataFrame, lag: int):
-    Xs = []
-    X_lengths = []
-    y = []
-
-    for fideid, player_df in df.groupby("fideid"):
-        for i in range(1, len(player_df) - lag + 1):
-            Xs.append(player_df.iloc[0:i+1].drop(columns=["elo"]).values)
-            X_lengths.append(i+1)
-            y.append(player_df.iloc[i:i+lag]["elo"])
-
-    padded_Xs = rnn_utils.pad_sequence([torch.tensor(x) for x in Xs], batch_first=True)
-    y = torch.tensor(y, dtype=torch.float32)
-    print(padded_Xs.size(), y.size())
-    
-    return rnn_utils.pack_padded_sequence(padded_Xs, X_lengths), np.array(y)
-
 class LSTMModel(torch.nn.Module):
     def __init__(self, input_size, hidden_size, num_layers, output_size, dropout):
         super(LSTMModel, self).__init__()
@@ -69,67 +61,6 @@ class LSTMModel(torch.nn.Module):
         _, (hidden, _) = self.lstm(x)
         out = self.fc(hidden[-1])
         return out.squeeze()
-    
-def train_lstm_models(timeseries_df: pd.DataFrame, lag=1):
-    # First we split and scale our data
-    data_splitter_and_scaler = DataSplitterAndScaler(timeseries_df, test_ratio=0.2, validation_ratio=0.2)
-
-    X_train, y_train = turn_df_into_lstm_windows(data_splitter_and_scaler.train_df, lag)
-    X_val, y_val = turn_df_into_lstm_windows(data_splitter_and_scaler.validation_df, lag)
-    X_test, y_test = turn_df_into_lstm_windows(data_splitter_and_scaler.test_df, lag)
-
-    LEARNING_RATES = np.linspace(0.001, 0.01, 5)
-    DROPOUT_RATES = np.linspace(0.1, 0.5, 5)
-    NUM_LAYERS = [1,2,3,4,5]
-    HIDDEN_SIZES = [8, 16, 32, 64, 128]
-    MAX_EPOCHS = 10000
-
-    best_model = None
-    best_val_loss = float("inf")
-    for (lr, dropout, layers, hidden_size) in zip(LEARNING_RATES, DROPOUT_RATES, NUM_LAYERS, HIDDEN_SIZES):
-        best_validation_loss_for_this_model = float("inf")
-
-        model = LSTMModel(input_size=X_train.data.shape[2], hidden_size=hidden_size, num_layers=layers, output_size=lag, dropout=dropout)
-        criterion = torch.nn.MSELoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-        cache_file = LSTM_CACHE_DIRECTORY / f"lstm_lr_{lr}_dropout_{dropout}_layers_{layers}_hidden_{hidden_size}_lag_{lag}.pt"
-
-        if cache_file.exists():
-            model.load_state_dict(torch.load(cache_file))
-            val_loss = criterion(model(X_val.data), torch.tensor(y_val, dtype=torch.float32)).item()
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                best_model = model
-            continue
-        
-        print(f"Training LSTM with lr={lr}, dropout={dropout}, layers={layers}, hidden_size={hidden_size}, lag={lag}")
-        print("-" * 50)
-        
-        for epoch in range(MAX_EPOCHS):
-            model.train()
-            optimizer.zero_grad()
-            outputs = model(X_train.data)
-            loss = criterion(outputs, torch.tensor(y_train, dtype=torch.float32))
-            loss.backward()
-            optimizer.step()
-
-            if epoch % 5 == 0:
-                model.eval()
-                with torch.no_grad():
-                    val_outputs = model(X_val.data)
-                    val_loss = criterion(val_outputs, torch.tensor(y_val, dtype=torch.float32)).item()
-
-                    print(f"Epoch {epoch}, Val Loss: {val_loss}")
-
-                    if val_loss < best_val_loss:
-                        best_val_loss = val_loss
-                        best_model = model
-                        torch.save(model.state_dict(), cache_file)
-                    if val_loss > best_validation_loss_for_this_model:
-                        break
-                    best_validation_loss_for_this_model = val_loss
-    
-
 
 def extract_linear_model_data(df: pd.DataFrame, lag):
     # pooled regression with arima errors. Look up python or r code.
@@ -296,6 +227,5 @@ if __name__ == "__main__":
     print(timeseries_data_table)
 
     for lag in range(1, 11):
-        #train_lstm_models(timeseries_data_table, lag=lag)
         print(f"Linear Model RMSE (lag={lag}): {train_elo_prediction_linear_model(timeseries_data_table, lag=lag)}")
         print(f"Exponential Smoothing RMSE (lag={lag}): {exponential_smoothing(timeseries_data_table, lag=lag)}")
