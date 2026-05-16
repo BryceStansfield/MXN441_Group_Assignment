@@ -7,6 +7,10 @@ from sklearn.linear_model import ElasticNet, Ridge
 from sklearn.ensemble import AdaBoostRegressor
 from sklearn.model_selection import GridSearchCV as SGridSearchCV
 from sklearn.neural_network import MLPRegressor
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.svm import SVR
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.tree import DecisionTreeRegressor
 import xgboost as xgb
 import pathlib
 
@@ -146,12 +150,103 @@ class PaperRidgeModel:
     
     def get_best_params(self):
         return self.cv_model.best_params_
+
+class PaperkNNModel:
+    def __init__(self, data: TabularModelData):
+        self.data = data
+        self.base_model = KNeighborsRegressor()
+
+    def fit(self):
+        X = self.data.data_table[self.data.X_columns]
+        Y = self.data.data_table[self.data.Y_columns].values.ravel()
         
+        self.cv_model = SGridSearchCV(self.base_model,
+                                      param_grid={"n_neighbors": [1, 3, 5, 10, 20, 50, 100]},
+                                      cv=5,
+                                      scoring="neg_root_mean_squared_error",
+                                      n_jobs=-1)
+        self.cv_model.fit(X, Y)
+
+    def get_cv_rmse(self):
+        return -self.cv_model.best_score_
+    
+    def get_best_params(self):
+        return self.cv_model.best_params_
+
+class PaperSVRModel:
+    def __init__(self, data: TabularModelData):
+        self.data = data
+        self.base_model = SVR()
+    
+    def fit(self):
+        X = self.data.data_table[self.data.X_columns]
+        Y = self.data.data_table[self.data.Y_columns].values.ravel()
+        
+        self.cv_model = SGridSearchCV(self.base_model,
+                                      param_grid={"C": [0.1, 1, 10, 100],
+                                                  "gamma": [0.001, 0.01, 0.1, 1],
+                                                  "kernel": ["rbf", "linear"]},
+                                      cv=5,
+                                      scoring="neg_root_mean_squared_error",
+                                      n_jobs=-1)
+        self.cv_model.fit(X, Y)
+
+    def get_cv_rmse(self):
+        return -self.cv_model.best_score_
+    
+    def get_best_params(self):
+        return self.cv_model.best_params_
+
+class PaperRFModel:
+    def __init__(self, data: TabularModelData):
+        self.data = data
+        self.base_model = RandomForestRegressor(random_state=1)
+    
+    def fit(self):
+        X = self.data.data_table[self.data.X_columns]
+        Y = self.data.data_table[self.data.Y_columns].values.ravel()
+        
+        self.cv_model = SGridSearchCV(self.base_model,
+                                      param_grid={"n_estimators": [10, 20, 50, 100, 200, 500, 1000],
+                                                  "max_depth": [1, 3, 5]},
+                                      cv=5,
+                                      scoring="neg_root_mean_squared_error",
+                                      n_jobs=-1)
+        self.cv_model.fit(X, Y)
+
+    def get_cv_rmse(self):
+        return -self.cv_model.best_score_
+    
+    def get_best_params(self):
+        return self.cv_model.best_params_
+    
+class PaperDTModel:
+    def __init__(self, data: TabularModelData):
+        self.data = data
+        self.base_model = DecisionTreeRegressor(random_state=1)
+    
+    def fit(self):
+        X = self.data.data_table[self.data.X_columns]
+        Y = self.data.data_table[self.data.Y_columns].values.ravel()
+        
+        self.cv_model = SGridSearchCV(self.base_model,
+                                      param_grid={"max_depth": [1, 3, 5, 10, 20, 50, 100]},
+                                      cv=5,
+                                      scoring="neg_root_mean_squared_error",
+                                      n_jobs=-1)
+        self.cv_model.fit(X, Y)
+
+    def get_cv_rmse(self):
+        return -self.cv_model.best_score_
+
+    def get_best_params(self):
+        return self.cv_model.best_params_
 
 def fit_all_paper_models(use_cache = False, verbose = True):
     data = preprocessing.build_tables_for_paper_models(preprocessing.open_filtered_standard_data())
 
-    model_classes = [PaperLinearModel, PaperGradientBoostingModel, PaperAdaBoostModel, PaperMLPModel, PaperElasticModel, PaperRidgeModel]
+    model_classes = [PaperLinearModel, PaperGradientBoostingModel, PaperAdaBoostModel, PaperMLPModel, PaperElasticModel, 
+                     PaperRidgeModel, PaperkNNModel, PaperSVRModel, PaperRFModel, PaperDTModel]
 
     best_models_per_dataset = []
 
