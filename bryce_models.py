@@ -16,16 +16,18 @@ import lightning.pytorch as pl
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor
 from lightning.pytorch.loggers import TensorBoardLogger
 
-from pytorch_forecasting import Baseline, TemporalFusionTransformer, TimeSeriesDataSet
-from pytorch_forecasting.data import GroupNormalizer
-from pytorch_forecasting.metrics import MAE, SMAPE, PoissonLoss, QuantileLoss
+from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
+from pytorch_forecasting.metrics.point import RMSE
 from pytorch_forecasting.models.temporal_fusion_transformer.tuning import optimize_hyperparameters
+from pytorch_forecasting.data.encoders import NaNLabelEncoder
+
+import pickle
 
 import warnings
 
 ELO_CUTOFF = 2500
-LSTM_CACHE_DIRECTORY = pathlib.Path("cache") / f"lstm_models_{ELO_CUTOFF}"
-LSTM_CACHE_DIRECTORY.mkdir(parents=True, exist_ok=True)
+TRANSFORMER_CACHE_DIRECTORY = pathlib.Path("cache") / f"transformer_models_{ELO_CUTOFF}"
+TRANSFORMER_CACHE_DIRECTORY.mkdir(parents=True, exist_ok=True)
 
 PLOT_DIR = pathlib.Path("plots")
 LINEAR_MODEL_PLOT_DIR = PLOT_DIR / f"linear_models_{ELO_CUTOFF}"
@@ -51,17 +53,6 @@ def split_timeseries_data_table_into_train_and_test(df: pd.DataFrame, test_ratio
 
     return df[df["fideid"].isin(train_fideids)].reset_index(drop=True), df[df["fideid"].isin(validation_fideids)].reset_index(drop=True), df[df["fideid"].isin(test_fideids)].reset_index(drop=True)
 
-class LSTMModel(torch.nn.Module):
-    def __init__(self, input_size, hidden_size, num_layers, output_size, dropout):
-        super(LSTMModel, self).__init__()
-        self.lstm = torch.nn.LSTM(input_size, hidden_size, num_layers, dropout=dropout, batch_first=True)
-        self.fc = torch.nn.Linear(hidden_size, output_size)
-
-    def forward(self, x):
-        _, (hidden, _) = self.lstm(x)
-        out = self.fc(hidden[-1])
-        return out.squeeze()
-
 def extract_linear_model_data(df: pd.DataFrame, lag):
     # pooled regression with arima errors. Look up python or r code.
     X_columns = ["time", "age_at_time", "elo", "games"]
@@ -80,6 +71,143 @@ def extract_linear_model_data(df: pd.DataFrame, lag):
         player_fide_ids += [fide_id] * len(player_df)
 
     return pd.concat(player_Xs, ignore_index=True), np.hstack(player_Ys), player_fide_ids
+
+def train_transformers(df: pd.DataFrame, lag=1, test_run = False):
+    max_encoder_length = 20
+
+    df = df.sort_values(["fideid", "time"])
+    df["time_idx"] = df.groupby("fideid").cumcount()
+
+    data_splitter_and_scaler = DataSplitterAndScaler(df)
+
+    training = TimeSeriesDataSet(
+        data_splitter_and_scaler.train_df,
+        time_idx="time_idx",
+        group_ids=["fideid"],
+        target="elo",
+        min_encoder_length=1,
+        max_encoder_length=max_encoder_length,
+        min_prediction_length=lag,
+        max_prediction_length=lag,
+        time_varying_known_reals=["time", "age_at_time"],
+        time_varying_unknown_reals=[
+            "elo"
+        ],
+        categorical_encoders={"fideid": NaNLabelEncoder(add_nan=True)},
+        time_varying_known_categoricals=[],
+        time_varying_unknown_categoricals=[],
+        add_relative_time_idx=True,
+        add_target_scales=True,
+        add_encoder_length=True,
+    )
+
+    # create validation set (predict=True) which means to predict the last max_prediction_length points in time
+    # for each series
+    validation = TimeSeriesDataSet.from_dataset(
+        training, data_splitter_and_scaler.validation_df, predict=True, stop_randomization=True
+    )
+
+    test_dataset = TimeSeriesDataSet.from_dataset(
+        training, data_splitter_and_scaler.test_df, predict=True, stop_randomization=True
+    )
+
+    # create dataloaders for model
+    batch_size = 128  # set this between 32 to 128
+    train_dataloader = training.to_dataloader(
+        train=True, batch_size=batch_size, num_workers=10
+    )
+    val_dataloader = validation.to_dataloader(
+        train=False, batch_size=batch_size, num_workers=10
+    )
+    test_dataloader = test_dataset.to_dataloader(
+        train=False, batch_size=batch_size, num_workers=10
+    )
+
+    # configure network and trainer
+    early_stop_callback = EarlyStopping(
+        monitor="val_loss", min_delta=1e-4, patience=10, verbose=False, mode="min"
+    )
+    lr_logger = LearningRateMonitor()  # log the learning rate
+    logger = TensorBoardLogger("lightning_logs")  # logging results to a tensorboard
+
+    study_path = TRANSFORMER_CACHE_DIRECTORY / f"transformer_study.pkl"
+
+    print("Doing optuna study for best params")
+    if study_path.exists():
+        with open(study_path, "rb") as f:
+            study = pickle.load(f) 
+    else:
+        study = optimize_hyperparameters(
+            train_dataloader,
+            val_dataloader,
+            model_path=str(TRANSFORMER_CACHE_DIRECTORY / f"{lag}_optuna"),
+            n_trials=200,
+            max_epochs=50,
+            gradient_clip_val_range=(0.01, 1.0),
+            hidden_size_range=(8, 128),
+            hidden_continuous_size_range=(8, 128),
+            attention_head_size_range=(1, 4),
+            learning_rate_range=(0.001, 0.1),
+            dropout_range=(0.1, 0.3),
+            trainer_kwargs=dict(limit_train_batches=30),
+            reduce_on_plateau_patience=4,
+            use_learning_rate_finder=True
+        )
+
+        with open(study_path, "wb") as f:
+            pickle.dump(study, f)
+
+    full_model_path = TRANSFORMER_CACHE_DIRECTORY / f"{lag}_transformer.model"
+    if full_model_path.exists() and not test_run:
+        print("Loading Model from cache")
+
+        with open(full_model_path, 'rb') as f:
+            kwargs, state_dict = torch.load(full_model_path, weights_only=False)
+            tft = TemporalFusionTransformer.from_dataset(
+                training,
+                loss=RMSE(),
+                **kwargs
+            )
+            tft.load_state_dict(state_dict)
+    else:
+        print("Training model")
+        trainer = pl.Trainer(
+            max_epochs=500 if not test_run else 1,
+            accelerator="cpu",
+            enable_model_summary=True,
+            # fast_dev_run=True,  # comment in to check that networkor dataset has no serious bugs
+            callbacks=[lr_logger, early_stop_callback],
+            logger=logger,
+            gradient_clip_val=study.best_params["gradient_clip_val"]
+        )
+
+        model_params = study.best_params.copy()
+        del model_params["gradient_clip_val"]
+        tft = TemporalFusionTransformer.from_dataset(
+            training,
+            loss=RMSE(),
+            log_interval=10,  # uncomment for learning rate finder and otherwise, e.g. to 10 for logging every 10 batches
+            optimizer="ranger",
+            reduce_on_plateau_patience=4,
+            **model_params
+        )
+        print(f"Number of parameters in network: {tft.size() / 1e3:.1f}k")
+
+        trainer.fit(
+            tft,
+            train_dataloaders=train_dataloader,
+            val_dataloaders=val_dataloader,
+        )
+
+        if not test_run:
+            with open(full_model_path, 'wb') as f:
+                torch.save([tft._hparams, tft.state_dict()], f)
+
+    predictions = tft.predict(
+        test_dataloader, return_y=True, trainer_kwargs=dict(accelerator="cpu")
+    )
+
+    return RMSE()(predictions.output, predictions.y) * data_splitter_and_scaler.get_elo_scale()
 
 def train_elo_prediction_linear_model(timeseries_df: pd.DataFrame, lag=1):
     # First we split and scale our data
@@ -211,21 +339,26 @@ class DataSplitterAndScaler:
         self.train_df, self.validation_df, self.test_df = split_timeseries_data_table_into_train_and_test(new_df, test_ratio, validation_ratio)
 
         self.scaler = MinMaxScaler()
-        self.train_df[self.train_df.columns.difference(["fideid"])] = self.scaler.fit_transform(self.train_df[self.train_df.columns.difference(["fideid"])])
+        scaling_cols = self.train_df.columns.difference(["fideid", "time_idx"])
+        self.train_df[scaling_cols] = self.scaler.fit_transform(self.train_df[scaling_cols])
         if len(self.validation_df) > 0:
-            self.validation_df[self.validation_df.columns.difference(["fideid"])] = self.scaler.transform(self.validation_df[self.validation_df.columns.difference(["fideid"])])
-        self.test_df[self.test_df.columns.difference(["fideid"])] = self.scaler.transform(self.test_df[self.test_df.columns.difference(["fideid"])])
+            self.validation_df[scaling_cols] = self.scaler.transform(self.validation_df[scaling_cols])
+        self.test_df[scaling_cols] = self.scaler.transform(self.test_df[scaling_cols])
     
     def get_elo_scale(self):
-        feature_names = self.scaler.feature_names_in_
         elo_index = self.scaler.feature_names_in_.tolist().index("elo")
         return self.scaler.data_max_[elo_index] - self.scaler.data_min_[elo_index]
 
 if __name__ == "__main__":
     # Build tables for paper models and print out the first few rows of each model's table
     timeseries_data_table = get_timeseries_data_table()
-    print(timeseries_data_table)
 
-    for lag in range(1, 11):
-        print(f"Linear Model RMSE (lag={lag}): {train_elo_prediction_linear_model(timeseries_data_table, lag=lag)}")
-        print(f"Exponential Smoothing RMSE (lag={lag}): {exponential_smoothing(timeseries_data_table, lag=lag)}")
+    performances = {}
+
+    for lag in range(6, 21):
+        performances[lag] = {}
+        performances[lag]["transformer"] = train_transformers(timeseries_data_table, lag, test_run=False)
+        performances[lag]["pooled_linear"] = train_elo_prediction_linear_model(timeseries_data_table, lag=lag)
+        performances[lag]["simple_exponential_smoothing"] = exponential_smoothing(timeseries_data_table, lag=lag)
+
+    print(performances)
