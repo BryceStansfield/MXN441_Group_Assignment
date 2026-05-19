@@ -24,6 +24,15 @@ from pytorch_forecasting.data.encoders import NaNLabelEncoder
 import pickle
 
 import warnings
+warnings.filterwarnings("ignore")   # Pytorch forecasting throws an inordinate number of warnings
+
+import logging
+
+class TipFilter(logging.Filter):
+    def filter(self, record):
+        return "💡 Tip" not in record.getMessage()
+
+logging.getLogger('lightning.pytorch.utilities.rank_zero').addFilter(TipFilter())
 
 ELO_CUTOFF = 2500
 TRANSFORMER_CACHE_DIRECTORY = pathlib.Path("cache") / f"transformer_models_{ELO_CUTOFF}"
@@ -32,6 +41,9 @@ TRANSFORMER_CACHE_DIRECTORY.mkdir(parents=True, exist_ok=True)
 PLOT_DIR = pathlib.Path("plots")
 LINEAR_MODEL_PLOT_DIR = PLOT_DIR / f"linear_models_{ELO_CUTOFF}"
 LINEAR_MODEL_PLOT_DIR.mkdir(parents=True, exist_ok=True)
+
+RESULT_PLOT_DIR = PLOT_DIR / "timeseries_result_plots"
+RESULT_PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Data preprocessing
 def yearly_first_data_subset(df: pd.DataFrame):
@@ -104,15 +116,19 @@ def train_transformers(df: pd.DataFrame, lag=1, test_run = False):
     # create validation set (predict=True) which means to predict the last max_prediction_length points in time
     # for each series
     validation = TimeSeriesDataSet.from_dataset(
-        training, data_splitter_and_scaler.validation_df, predict=True, stop_randomization=True
+        training, data_splitter_and_scaler.validation_df, predict=False, stop_randomization=True
     )
 
     test_dataset = TimeSeriesDataSet.from_dataset(
-        training, data_splitter_and_scaler.test_df, predict=True, stop_randomization=True
+        training, data_splitter_and_scaler.test_df, predict=False, stop_randomization=True
     )
 
+    individual_test_datasets = [
+        (test_set, TimeSeriesDataSet.from_dataset(training, test_set, predict=False, stop_randomization=True)) for test_set in data_splitter_and_scaler.split_test_into_individuals(lag+5)
+    ]
+
     # create dataloaders for model
-    batch_size = 128  # set this between 32 to 128
+    batch_size = 128
     train_dataloader = training.to_dataloader(
         train=True, batch_size=batch_size, num_workers=10
     )
@@ -203,11 +219,41 @@ def train_transformers(df: pd.DataFrame, lag=1, test_run = False):
             with open(full_model_path, 'wb') as f:
                 torch.save([tft._hparams, tft.state_dict()], f)
 
+    # Let's display our results on our best and worse performing test_set.
+    worst_testset_tuple = None
+    worst_testset_rmse = 0
+    best_testset_tuple = None
+    best_testset_rmse = 10000000000000000
+    for i, (test_set, test_set_loader) in enumerate(individual_test_datasets):
+        predictions = tft.predict(test_set_loader, return_y=True, trainer_kwargs=dict(accelerator="cpu", logger=False))
+
+        rmse = RMSE()(predictions.output, predictions.y)
+        if rmse > worst_testset_rmse:
+            worst_testset_rmse = rmse
+            worst_testset_tuple = (test_set, predictions)
+        if rmse < best_testset_rmse:
+            best_testset_rmse = rmse
+            best_testset_tuple = (test_set, predictions)
+
+    def plot_model_predictions(test_predictions, output_name):
+        print(torch.tensor(test_set["elo"].values))
+        output = test_predictions.output.flatten()
+        ys = predictions.y[0].flatten()
+        print(output.size())
+        print(ys.size())
+        plt.clf()
+        plt.plot([i + lag for i in range(len(ys))], ys * data_splitter_and_scaler.get_elo_scale() + data_splitter_and_scaler.get_elo_minimum())
+        plt.plot([i + lag for i in range(len(output))], output * data_splitter_and_scaler.get_elo_scale() + data_splitter_and_scaler.get_elo_minimum())
+        plt.savefig(RESULT_PLOT_DIR / output_name)
+    
+    plot_model_predictions(worst_testset_tuple[1], f"torch_worst_prediction_{lag}.png")
+    plot_model_predictions(best_testset_tuple[1], f"torch_best_prediction_{lag}.png")
+
     predictions = tft.predict(
         test_dataloader, return_y=True, trainer_kwargs=dict(accelerator="cpu")
     )
 
-    return RMSE()(predictions.output, predictions.y) * data_splitter_and_scaler.get_elo_scale()
+    return {"rmse": RMSE()(predictions.output, predictions.y) * data_splitter_and_scaler.get_elo_scale()}
 
 def train_elo_prediction_linear_model(timeseries_df: pd.DataFrame, lag=1):
     # First we split and scale our data
@@ -289,7 +335,7 @@ def train_elo_prediction_linear_model(timeseries_df: pd.DataFrame, lag=1):
 
 
     # Let's return our RMSE on the test set
-    return np.sqrt(mean_squared_error(y_test, model.predict(X_test))) * data_splitter_and_scaler.get_elo_scale()
+    return {"rmse": np.sqrt(mean_squared_error(y_test, model.predict(X_test))) * data_splitter_and_scaler.get_elo_scale()}
 
 def exponential_smoothing(timeseries_df: pd.DataFrame, lag=1):
     with warnings.catch_warnings():
@@ -330,7 +376,7 @@ def exponential_smoothing(timeseries_df: pd.DataFrame, lag=1):
             player_df = player_df.dropna(subset=["predicted_elo"])
             square_errors.extend((player_df["elo"] - player_df["predicted_elo"]) ** 2)
         
-        return np.sqrt(np.mean(square_errors)) * data_splitter_and_scaler.get_elo_scale()
+        return {"rmse": np.sqrt(np.mean(square_errors)) * data_splitter_and_scaler.get_elo_scale()}
 
 class DataSplitterAndScaler:
     def __init__(self, df: pd.DataFrame, test_ratio=0.2, validation_ratio=0.2):
@@ -344,21 +390,40 @@ class DataSplitterAndScaler:
         if len(self.validation_df) > 0:
             self.validation_df[scaling_cols] = self.scaler.transform(self.validation_df[scaling_cols])
         self.test_df[scaling_cols] = self.scaler.transform(self.test_df[scaling_cols])
+
+        self.elo_index = self.scaler.feature_names_in_.tolist().index("elo")
     
     def get_elo_scale(self):
-        elo_index = self.scaler.feature_names_in_.tolist().index("elo")
-        return self.scaler.data_max_[elo_index] - self.scaler.data_min_[elo_index]
+        return self.scaler.data_max_[self.elo_index] - self.scaler.data_min_[self.elo_index]
+    
+    def get_elo_minimum(self):
+        return self.scaler.data_min_[self.elo_index]
+
+    def split_test_into_individuals(self, min_length = 5):
+        test_sets = []
+
+        for _, df in self.test_df.groupby("fideid"):
+            if len(df) >= min_length:
+                test_sets.append(df)
+        
+        return test_sets
 
 if __name__ == "__main__":
     # Build tables for paper models and print out the first few rows of each model's table
     timeseries_data_table = get_timeseries_data_table()
 
     performances = {}
+    MAX_LAG = 10
 
-    for lag in range(1, 11):
+    for lag in range(1, MAX_LAG+1):
         performances[lag] = {}
         performances[lag]["transformer"] = train_transformers(timeseries_data_table, lag, test_run=False)
         performances[lag]["pooled_linear"] = train_elo_prediction_linear_model(timeseries_data_table, lag=lag)
         performances[lag]["simple_exponential_smoothing"] = exponential_smoothing(timeseries_data_table, lag=lag)
 
-    print(performances)
+    performance_dicts = []
+    for lag in range(1, MAX_LAG+1):
+        for model in performances[lag]:
+            performance_dicts.append({"lag": lag, "model": model, "rmse": performances[lag][model]["rmse"]})
+    
+    pd.DataFrame(performance_dicts).to_csv("cache/timeseries_performances.csv")
