@@ -355,7 +355,7 @@ if __name__ == "__main__":
 
     performances = {}
 
-    for lag in range(6, 21):
+    for lag in range(1, 11):
         performances[lag] = {}
         performances[lag]["transformer"] = train_transformers(timeseries_data_table, lag, test_run=False)
         performances[lag]["pooled_linear"] = train_elo_prediction_linear_model(timeseries_data_table, lag=lag)

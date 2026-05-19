@@ -13,6 +13,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.tree import DecisionTreeRegressor
 import xgboost as xgb
 import pathlib
+import pandas as pd
 
 # PaperModels, cv n=5 like in the paper.
 class PaperLinearModel:
@@ -249,6 +250,7 @@ def fit_all_paper_models(use_cache = False, verbose = True):
                      PaperRidgeModel, PaperkNNModel, PaperSVRModel, PaperRFModel, PaperDTModel]
 
     best_models_per_dataset = []
+    model_performances = []
 
     # Cache directory
     cache_directory = pathlib.Path("cache/paper_models")
@@ -284,6 +286,10 @@ def fit_all_paper_models(use_cache = False, verbose = True):
                     if verbose:
                         print(f"Finished fitting {model_class.__name__} on dataset {dataset.model_name}. CV RMSE: {model.get_cv_rmse():.4f}, Best Params: {model.get_best_params()}")
 
+                model_rmse = model.get_cv_rmse()
+
+                model_performances.append({"ml_model": model_class.__name__, "paper_model":dataset.model_name, "rmse":model_rmse})
+
                 if model.get_cv_rmse() < best_rmse_so_far:
                     best_rmse_so_far = model.get_cv_rmse()
                     best_model_so_far = model_class.__name__
@@ -298,6 +304,10 @@ def fit_all_paper_models(use_cache = False, verbose = True):
     for i in range(len(best_models_per_dataset)):
         model_name, best_model, best_rmse = best_models_per_dataset[i]
         print(f"Best model for dataset {model_name} (n={len(data[i].data_table)}): {best_model} with CV RMSE: {best_rmse:.4f}")
+    
+    model_performances_df = pd.DataFrame(model_performances)
+    model_performances_df.to_csv("cache/paper_model_performances.csv")
+    print(model_performances_df.to_string())
 
 if __name__ == "__main__":
     fit_all_paper_models()
