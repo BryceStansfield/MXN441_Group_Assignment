@@ -1,5 +1,8 @@
 import torch
 
+import matplotlib
+matplotlib.use('Agg')  # Must be before importing pyplot
+
 from preprocessing import get_full_timeseries_model
 import pandas as pd
 import numpy as np
@@ -13,8 +16,7 @@ from sklearn.metrics import mean_squared_error
 from statsmodels.tsa.api import SimpleExpSmoothing
 
 import lightning.pytorch as pl
-from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor
-from lightning.pytorch.loggers import TensorBoardLogger
+from lightning.pytorch.callbacks import EarlyStopping
 
 from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
 from pytorch_forecasting.metrics.point import RMSE
@@ -161,8 +163,8 @@ def train_transformers(df: pd.DataFrame, max_lag=1, test_run = False):
     early_stop_callback = EarlyStopping(
         monitor="val_loss", min_delta=1e-4, patience=20, verbose=False, mode="min"
     )
-    lr_logger = LearningRateMonitor()  # log the learning rate
-    logger = TensorBoardLogger("lightning_logs")  # logging results to a tensorboard
+    #lr_logger = LearningRateMonitor()  # log the learning rate
+    #logger = TensorBoardLogger("lightning_logs")  # logging results to a tensorboard
 
     study_path = TRANSFORMER_CACHE_DIRECTORY / f"transformer_study.pkl"
 
@@ -210,8 +212,7 @@ def train_transformers(df: pd.DataFrame, max_lag=1, test_run = False):
             accelerator="cpu",
             enable_model_summary=True,
             # fast_dev_run=True,  # comment in to check that networkor dataset has no serious bugs
-            callbacks=[lr_logger, early_stop_callback],
-            logger=logger,
+            callbacks=[early_stop_callback],
             gradient_clip_val=study.best_params["gradient_clip_val"]
         )
 
