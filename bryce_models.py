@@ -89,7 +89,7 @@ def split_timeseries_data_table_into_train_and_test(df: pd.DataFrame, test_ratio
 
 def extract_linear_model_data(df: pd.DataFrame, lag):
     # pooled regression with arima errors. Look up python or r code.
-    X_columns = ["time", "age_at_time", "elo", "games"]
+    X_columns = ["time", "age_at_time", "elo", "games", "age*games"]
 
     player_Xs = []
     player_fide_ids = []
@@ -97,6 +97,7 @@ def extract_linear_model_data(df: pd.DataFrame, lag):
 
     for fide_id, player_df in df.groupby("fideid"):
         player_df = player_df.copy()
+        player_df["age*games"] = player_df["age"] * player_df["games"]
         player_df["next_year_elo"] = player_df["elo"].shift(-lag)
         player_df = player_df.dropna(subset=["next_year_elo"])
         

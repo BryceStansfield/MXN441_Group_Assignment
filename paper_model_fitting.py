@@ -24,13 +24,13 @@ class PaperLinearModel:
 
         self.X = self.data.data_table[self.data.X_columns]
         self.Y = self.data.data_table[self.data.Y_columns].values.ravel()
-        self.cv_model = self.base_model
         self.rmses = None
+        self.cv_model = self.base_model
     
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return sum(self.rmses)/len(self.rmses)
+        return -sum(self.rmses)/len(self.rmses)
     
     def get_best_params(self):
         raise NotImplementedError()
@@ -42,6 +42,7 @@ class PaperGradientBoostingModel:
 
         self.X = self.data.data_table[self.data.X_columns]
         self.Y = self.data.data_table[self.data.Y_columns].values.ravel()
+        self.rmses = None
         
         self.cv_model = SGridSearchCV(self.base_model,
                                       param_grid={"n_estimators": [10, 20, 50, 100, 200, 500, 1000],
@@ -54,7 +55,7 @@ class PaperGradientBoostingModel:
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return sum(self.rmses)/len(self.rmses)
+        return -sum(self.rmses)/len(self.rmses)
 
     def get_best_params(self):
         raise NotImplementedError()
@@ -66,6 +67,7 @@ class PaperAdaBoostModel:
         self.base_model = AdaBoostRegressor(random_state=1)
         self.X = self.data.data_table[self.data.X_columns]
         self.Y = self.data.data_table[self.data.Y_columns].values.ravel()
+        self.rmses = None
         
         self.cv_model = SGridSearchCV(self.base_model,
                                       param_grid={"n_estimators": [10, 20, 50, 100, 200, 500, 1000],
@@ -78,7 +80,7 @@ class PaperAdaBoostModel:
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return sum(self.rmses)/len(self.rmses)
+        return -sum(self.rmses)/len(self.rmses)
 
     def get_best_params(self):
         raise NotImplementedError()
@@ -90,6 +92,7 @@ class PaperMLPModel:
         self.base_model = MLPRegressor(max_iter = 10000, random_state=1)
         self.X = self.data.data_table[self.data.X_columns]
         self.Y = self.data.data_table[self.data.Y_columns].values.ravel()
+        self.rmses = None
         
         self.cv_model = SGridSearchCV(self.base_model,
                                       param_grid={"hidden_layer_sizes": [(10,), (50,), (100,), (10, 10), (50, 50), (100, 100), (10, 10, 10), (50, 50, 50), (100, 100, 100)],
@@ -102,7 +105,7 @@ class PaperMLPModel:
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return sum(self.rmses)/len(self.rmses)
+        return -sum(self.rmses)/len(self.rmses)
 
     def get_best_params(self):
         raise NotImplementedError()
@@ -115,6 +118,7 @@ class PaperElasticModel:
         self.base_model = ElasticNet(max_iter=10000, random_state=1)
         self.X = self.data.data_table[self.data.X_columns]
         self.Y = self.data.data_table[self.data.Y_columns].values.ravel()
+        self.rmses = None
 
         self.cv_model = SGridSearchCV(self.base_model,
                                       param_grid={"alpha": [0.0001, 0.001, 0.01, 0.1, 1, 10, 100],
@@ -126,7 +130,7 @@ class PaperElasticModel:
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return sum(self.rmses)/len(self.rmses)
+        return -sum(self.rmses)/len(self.rmses)
     
     def get_best_params(self):
         raise NotImplementedError()
@@ -139,6 +143,7 @@ class PaperRidgeModel:
 
         self.X = self.data.data_table[self.data.X_columns]
         self.Y = self.data.data_table[self.data.Y_columns].values.ravel()
+        self.rmses = None
 
         self.cv_model = SGridSearchCV(self.base_model,
                                       param_grid={"alpha": [0.0001, 0.001, 0.01, 0.1, 1, 10, 100]},
@@ -149,7 +154,7 @@ class PaperRidgeModel:
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return sum(self.rmses)/len(self.rmses)
+        return -sum(self.rmses)/len(self.rmses)
     
     def get_best_params(self):
         raise NotImplementedError()
@@ -161,6 +166,7 @@ class PaperkNNModel:
         self.base_model = KNeighborsRegressor()
         self.X = self.data.data_table[self.data.X_columns]
         self.Y = self.data.data_table[self.data.Y_columns].values.ravel()
+        self.rmses = None
         
         self.cv_model = SGridSearchCV(self.base_model,
                                       param_grid={"n_neighbors": [1, 3, 5, 10, 20, 50, 100]},
@@ -171,7 +177,7 @@ class PaperkNNModel:
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return sum(self.rmses)/len(self.rmses)
+        return -sum(self.rmses)/len(self.rmses)
     
     def get_best_params(self):
         raise NotImplementedError()
@@ -183,6 +189,7 @@ class PaperSVRModel:
         self.base_model = SVR()
         self.X = self.data.data_table[self.data.X_columns]
         self.Y = self.data.data_table[self.data.Y_columns].values.ravel()
+        self.rmses = None
         
         self.cv_model = SGridSearchCV(self.base_model,
                                       param_grid={"C": [0.1, 1, 10, 100],
@@ -195,7 +202,7 @@ class PaperSVRModel:
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return sum(self.rmses)/len(self.rmses)
+        return -sum(self.rmses)/len(self.rmses)
     
     def get_best_params(self):
         raise NotImplementedError()
@@ -207,6 +214,7 @@ class PaperRFModel:
         self.base_model = RandomForestRegressor(random_state=1)
         self.X = self.data.data_table[self.data.X_columns]
         self.Y = self.data.data_table[self.data.Y_columns].values.ravel()
+        self.rmses = None
         
         self.cv_model = SGridSearchCV(self.base_model,
                                       param_grid={"n_estimators": [10, 20, 50, 100, 200, 500, 1000],
@@ -218,7 +226,7 @@ class PaperRFModel:
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return sum(self.rmses)/len(self.rmses)
+        return -sum(self.rmses)/len(self.rmses)
     
     def get_best_params(self):
         raise NotImplementedError()
@@ -231,6 +239,7 @@ class PaperDTModel:
 
         self.X = self.data.data_table[self.data.X_columns]
         self.Y = self.data.data_table[self.data.Y_columns].values.ravel()
+        self.rmses = None
         
         self.cv_model = SGridSearchCV(self.base_model,
                                       param_grid={"max_depth": [1, 3, 5, 10, 20, 50, 100]},
@@ -241,7 +250,7 @@ class PaperDTModel:
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return sum(self.rmses)/len(self.rmses)
+        return -sum(self.rmses)/len(self.rmses)
 
     def get_best_params(self):
         raise NotImplementedError()
