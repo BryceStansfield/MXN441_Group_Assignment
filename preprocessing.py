@@ -692,7 +692,7 @@ def build_tables_for_paper_models(player_data, cutoff_date: datetime.datetime = 
     early_high_elo = base_table["elo2400_date"] < datetime.datetime(1968, 4, 1)
 
     # And let's get rid of any obvious wrong birthdays.
-    wrong_birthday = (base_table["gm_title_age"] < 5) | (base_table["gm_title_age"] > 66)
+    wrong_birthday = (base_table["gm_title_age"] < 12) | (base_table["gm_title_age"] > 66)
 
     base_table = base_table[~early_high_elo & ~wrong_birthday]    # These players don't have useful data for our models.
 

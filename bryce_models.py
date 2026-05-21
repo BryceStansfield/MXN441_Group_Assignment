@@ -107,7 +107,7 @@ def extract_linear_model_data(df: pd.DataFrame, lag):
 
     for fide_id, player_df in df.groupby("fideid"):
         player_df = player_df.copy()
-        player_df["age*games"] = player_df["age"] * player_df["games"]
+        player_df["age*games"] = player_df["age_at_time"] * player_df["games"]
         player_df["next_year_elo"] = player_df["elo"].shift(-lag)
         player_df = player_df.dropna(subset=["next_year_elo"])
         
@@ -441,18 +441,30 @@ if __name__ == "__main__":
     # Build tables for paper models and print out the first few rows of each model's table
     timeseries_data_table = get_timeseries_data_table()
 
-    performances = {}
+    performances = {"transformer": [], "pooled_linear": [], "simple_exponential_smoothing": []}
     MAX_LAG = 10
 
     train_transformers(timeseries_data_table, MAX_LAG, test_run=False)
     for lag in range(1, MAX_LAG+1):
-        performances[lag] = {}
-        performances[lag]["pooled_linear"] = train_elo_prediction_linear_model(timeseries_data_table, lag=lag)
-        performances[lag]["simple_exponential_smoothing"] = exponential_smoothing(timeseries_data_table, lag=lag)
+        performances["pooled_linear"][lag] = train_elo_prediction_linear_model(timeseries_data_table, lag=lag)
+        performances["simple_exponential_smoothing"][lag] = exponential_smoothing(timeseries_data_table, lag=lag)
 
     performance_dicts = []
     for lag in range(1, MAX_LAG+1):
         for model in performances[lag]:
             performance_dicts.append({"lag": lag, "model": model, "rmse": performances[lag][model]["rmse"]})
+    
+    # Lets plot our performances.
+    rmse_dict = {}
+    for key in performances:
+        rmse_dict[key] = [x["rmse"] for x in performances[key]]
+    plt.clf()
+    
+    for key in rmse_dict:
+        plt.plot([i for i in range(1, MAX_LAG+1)], rmse_dict[key], label=key)
+    plt.xlabel("Lag")
+    plt.ylabel("rmse")
+    plt.title("Model performances vs lag")
+    plt.savefig(PLOT_DIR / f"{MAX_LAG}_timeseries_model_performances.png")
     
     pd.DataFrame(performance_dicts).to_csv("cache/timeseries_performances.csv")

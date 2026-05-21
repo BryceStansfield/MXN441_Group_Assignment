@@ -20,7 +20,7 @@ import numpy as np
 import itertools
 import matplotlib.pyplot as plt
 
-HEATMAP_DIR = pathlib.Path("visualization/heatmaps")
+HEATMAP_DIR = pathlib.Path("visualizations/heatmaps")
 HEATMAP_DIR.mkdir(parents=True, exist_ok=True)
 
 def rmses_to_score(rmses):
@@ -46,7 +46,7 @@ class PaperLinearModel:
 
     def get_cv_rmse(self):
         if self.rmses is None:
-            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
+            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=min(10, len(self.Y)))
         return rmses_to_score(self.rmses)    
     def get_best_params(self):
         raise NotImplementedError()
@@ -74,7 +74,7 @@ class PaperGradientBoostingModel:
 
     def get_cv_rmse(self):
         if self.rmses is None:
-            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
+            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=min(10, len(self.Y)))
         return rmses_to_score(self.rmses)
 
     def get_best_params(self):
@@ -102,7 +102,7 @@ class PaperAdaBoostModel:
 
     def get_cv_rmse(self):
         if self.rmses is None:
-            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
+            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=min(10, len(self.Y)))
         return rmses_to_score(self.rmses)
     def get_best_params(self):
         raise NotImplementedError()
@@ -130,7 +130,7 @@ class PaperMLPModel:
 
     def get_cv_rmse(self):
         if self.rmses is None:
-            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
+            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=min(10, len(self.Y)))
         return rmses_to_score(self.rmses)
     def get_best_params(self):
         raise NotImplementedError()
@@ -158,7 +158,7 @@ class PaperElasticModel:
 
     def get_cv_rmse(self):
         if self.rmses is None:
-            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
+            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=min(10, len(self.Y)))
         return rmses_to_score(self.rmses)    
     def get_best_params(self):
         raise NotImplementedError()
@@ -185,7 +185,7 @@ class PaperRidgeModel:
 
     def get_cv_rmse(self):
         if self.rmses is None:
-            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
+            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=min(10, len(self.Y)))
         return rmses_to_score(self.rmses)    
     def get_best_params(self):
         raise NotImplementedError()
@@ -211,7 +211,7 @@ class PaperkNNModel:
 
     def get_cv_rmse(self):
         if self.rmses is None:
-            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
+            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=min(10, len(self.Y)))
         return rmses_to_score(self.rmses)    
     def get_best_params(self):
         raise NotImplementedError()
@@ -238,7 +238,7 @@ class PaperSVRModel:
 
     def get_cv_rmse(self):
         if self.rmses is None:
-            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
+            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=min(10, len(self.Y)))
         return rmses_to_score(self.rmses)    
     def get_best_params(self):
         raise NotImplementedError()
@@ -264,7 +264,7 @@ class PaperRFModel:
 
     def get_cv_rmse(self):
         if self.rmses is None:
-            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
+            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=min(10, len(self.Y)))
         return rmses_to_score(self.rmses)
 
     def get_best_params(self):
@@ -292,7 +292,7 @@ class PaperDTModel:
 
     def get_cv_rmse(self):
         if self.rmses is None:
-            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
+            self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=min(10, len(self.Y)))
         return rmses_to_score(self.rmses)
     
     def get_best_params(self):
@@ -333,18 +333,23 @@ def model_heatmap(data: TabularModelData, model, steps=30):
         for i, (x, y) in enumerate(itertools.product([i for i in range(steps)], [i for i in range(steps)])):
             IM[y][x] = Ys[i]
         plt.imshow(IM)
+        plt.colorbar()
         plt.xlabel(X_col_names[0])
         plt.xticks([0, steps-1], [round(X_steps[0][0]), round(X_steps[0][-1])])
         plt.ylabel(X_col_names[1])
         plt.yticks([0, steps-1], [round(X_steps[1][0]), round(X_steps[1][-1])])
+        plt.title(data.Y_columns[0])
         plt.savefig(HEATMAP_DIR / f"{data.model_name}_best_model_heatmap.png")
     if len(X_col_names) == 1:
         plt.clf()
         IM = np.array(X_df[X_col_names[0]])
         IM = IM.reshape(-1, 1)
         plt.imshow(IM)
+        plt.colorbar()
         plt.ylabel(X_col_names[0])
         plt.yticks([0, steps-1], [round(X_steps[0][0]), round(X_steps[0][-1])])
+        plt.xticks([0], [""])
+        plt.title(data.Y_columns[0])
         plt.savefig(HEATMAP_DIR / f"{data.model_name}_best_model_heatmap.png")
         return
 
