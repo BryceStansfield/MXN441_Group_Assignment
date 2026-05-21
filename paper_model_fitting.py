@@ -15,6 +15,19 @@ from sklearn.tree import DecisionTreeRegressor
 import xgboost as xgb
 import pathlib
 import pandas as pd
+import math
+import numpy as np
+import itertools
+import matplotlib.pyplot as plt
+
+HEATMAP_DIR = pathlib.Path("visualization/heatmaps")
+HEATMAP_DIR.mkdir(parents=True, exist_ok=True)
+
+def rmses_to_score(rmses):
+    rmses = list(rmses)
+    if any(map(lambda i: math.isnan(i), rmses)):
+        return float('inf')
+    return -sum(rmses)/len(rmses)
 
 # PaperModels, cv n=5 like in the paper.
 class PaperLinearModel:
@@ -27,11 +40,14 @@ class PaperLinearModel:
         self.rmses = None
         self.cv_model = self.base_model
     
+    def get_full_model_fit(self):
+        self.cv_model.fit(self.X, self.Y)
+        return self.cv_model
+
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return -sum(self.rmses)/len(self.rmses)
-    
+        return rmses_to_score(self.rmses)    
     def get_best_params(self):
         raise NotImplementedError()
 
@@ -52,14 +68,17 @@ class PaperGradientBoostingModel:
                                       scoring="neg_root_mean_squared_error",
                                       n_jobs=-1)
     
+    def get_full_model_fit(self):
+        self.cv_model.fit(self.X, self.Y)
+        return self.cv_model
+
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return -sum(self.rmses)/len(self.rmses)
+        return rmses_to_score(self.rmses)
 
     def get_best_params(self):
         raise NotImplementedError()
-
 
 class PaperAdaBoostModel:
     def __init__(self, data: TabularModelData):
@@ -77,11 +96,14 @@ class PaperAdaBoostModel:
                                       n_jobs=-1)
         
     
+    def get_full_model_fit(self):
+        self.cv_model.fit(self.X, self.Y)
+        return self.cv_model
+
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return -sum(self.rmses)/len(self.rmses)
-
+        return rmses_to_score(self.rmses)
     def get_best_params(self):
         raise NotImplementedError()
 
@@ -102,11 +124,14 @@ class PaperMLPModel:
                                       scoring="neg_root_mean_squared_error",
                                       n_jobs=-1)
 
+    def get_full_model_fit(self):
+        self.cv_model.fit(self.X, self.Y)
+        return self.cv_model
+
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return -sum(self.rmses)/len(self.rmses)
-
+        return rmses_to_score(self.rmses)
     def get_best_params(self):
         raise NotImplementedError()
 
@@ -127,11 +152,14 @@ class PaperElasticModel:
                                       scoring="neg_root_mean_squared_error",
                                       n_jobs=-1)
 
+    def get_full_model_fit(self):
+        self.cv_model.fit(self.X, self.Y)
+        return self.cv_model
+
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return -sum(self.rmses)/len(self.rmses)
-    
+        return rmses_to_score(self.rmses)    
     def get_best_params(self):
         raise NotImplementedError()
 
@@ -151,11 +179,14 @@ class PaperRidgeModel:
                                       scoring="neg_root_mean_squared_error",
                                       n_jobs=-1)
 
+    def get_full_model_fit(self):
+        self.cv_model.fit(self.X, self.Y)
+        return self.cv_model
+
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return -sum(self.rmses)/len(self.rmses)
-    
+        return rmses_to_score(self.rmses)    
     def get_best_params(self):
         raise NotImplementedError()
 
@@ -174,14 +205,16 @@ class PaperkNNModel:
                                       scoring="neg_root_mean_squared_error",
                                       n_jobs=-1)
 
+    def get_full_model_fit(self):
+        self.cv_model.fit(self.X, self.Y)
+        return self.cv_model
+
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return -sum(self.rmses)/len(self.rmses)
-    
+        return rmses_to_score(self.rmses)    
     def get_best_params(self):
         raise NotImplementedError()
-
 
 class PaperSVRModel:
     def __init__(self, data: TabularModelData):
@@ -199,14 +232,16 @@ class PaperSVRModel:
                                       scoring="neg_root_mean_squared_error",
                                       n_jobs=-1)
 
+    def get_full_model_fit(self):
+        self.cv_model.fit(self.X, self.Y)
+        return self.cv_model
+
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return -sum(self.rmses)/len(self.rmses)
-    
+        return rmses_to_score(self.rmses)    
     def get_best_params(self):
         raise NotImplementedError()
-
 
 class PaperRFModel:
     def __init__(self, data: TabularModelData):
@@ -222,12 +257,16 @@ class PaperRFModel:
                                       cv=5,
                                       scoring="neg_root_mean_squared_error",
                                       n_jobs=-1)
+    
+    def get_full_model_fit(self):
+        self.cv_model.fit(self.X, self.Y)
+        return self.cv_model
 
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return -sum(self.rmses)/len(self.rmses)
-    
+        return rmses_to_score(self.rmses)
+
     def get_best_params(self):
         raise NotImplementedError()
 
@@ -247,16 +286,69 @@ class PaperDTModel:
                                       scoring="neg_root_mean_squared_error",
                                       n_jobs=-1)
 
+    def get_full_model_fit(self):
+        self.cv_model.fit(self.X, self.Y)
+        return self.cv_model
+
     def get_cv_rmse(self):
         if self.rmses is None:
             self.rmses = cross_val_score(self.cv_model, self.X, self.Y, scoring="neg_root_mean_squared_error", cv=10)
-        return -sum(self.rmses)/len(self.rmses)
-
+        return rmses_to_score(self.rmses)
+    
     def get_best_params(self):
         raise NotImplementedError()
 
+def get_X_ranges(data: TabularModelData):
+    col_ranges = {}
 
-def fit_all_paper_models(use_cache = False, verbose = True):
+    for col in data.X_columns:
+        min = data.data_table[col].min()
+        max = data.data_table[col].max()
+
+        col_ranges[col] = {"min": min, "max": max}
+    return col_ranges
+
+def model_heatmap(data: TabularModelData, model, steps=30):
+    fit_model = model.get_full_model_fit()
+    X_ranges = get_X_ranges(data)
+    X_col_names = [x for x in X_ranges]
+    if len(X_col_names) > 2:
+        return # No 3d heatmaps.
+    
+    X_steps = [list(np.linspace(X_ranges[x]["min"], X_ranges[x]["max"], num=steps)) for x in X_ranges]
+
+    X = []
+    for X_s in itertools.product(*X_steps):
+        d = {}
+        for i in range(len(X_s)):
+            d[X_col_names[i]] = X_s[i]
+        X.append(d)
+    
+    X_df = pd.DataFrame(X)
+    Ys = fit_model.predict(X_df)
+
+    if len(X_col_names) == 2:
+        plt.clf()
+        IM = [[0 for i in range(steps)] for j in range(steps)]
+        for i, (x, y) in enumerate(itertools.product([i for i in range(steps)], [i for i in range(steps)])):
+            IM[y][x] = Ys[i]
+        plt.imshow(IM)
+        plt.xlabel(X_col_names[0])
+        plt.xticks([0, steps-1], [round(X_steps[0][0]), round(X_steps[0][-1])])
+        plt.ylabel(X_col_names[1])
+        plt.yticks([0, steps-1], [round(X_steps[1][0]), round(X_steps[1][-1])])
+        plt.savefig(HEATMAP_DIR / f"{data.model_name}_best_model_heatmap.png")
+    if len(X_col_names) == 1:
+        plt.clf()
+        IM = np.array(X_df[X_col_names[0]])
+        IM = IM.reshape(-1, 1)
+        plt.imshow(IM)
+        plt.ylabel(X_col_names[0])
+        plt.yticks([0, steps-1], [round(X_steps[0][0]), round(X_steps[0][-1])])
+        plt.savefig(HEATMAP_DIR / f"{data.model_name}_best_model_heatmap.png")
+        return
+
+def fit_all_paper_models(use_cache = True, verbose = True):
     data = preprocessing.build_tables_for_paper_models(preprocessing.open_filtered_standard_data())
 
     model_classes = [PaperLinearModel, PaperGradientBoostingModel, PaperAdaBoostModel, PaperMLPModel, PaperElasticModel, 
@@ -271,7 +363,7 @@ def fit_all_paper_models(use_cache = False, verbose = True):
 
     print("Fitting paper models...")
     for dataset in data:
-        best_model_so_far = ""
+        best_model_name_so_far = ""
         best_rmse_so_far = float('inf')
 
         for model_class in model_classes:
@@ -305,14 +397,16 @@ def fit_all_paper_models(use_cache = False, verbose = True):
 
                 if model.get_cv_rmse() < best_rmse_so_far:
                     best_rmse_so_far = model.get_cv_rmse()
-                    best_model_so_far = model_class.__name__
+                    best_model_name_so_far = model_class.__name__
+                    best_model_so_far = model
 
                     if verbose:
-                        print(f"New best model for dataset {dataset.model_name}: {best_model_so_far} with CV RMSE: {best_rmse_so_far:.4f}")
+                        print(f"New best model for dataset {dataset.model_name}: {best_model_name_so_far} with CV RMSE: {best_rmse_so_far:.4f}")
             except Exception as e:
                 raise e
         
-        best_models_per_dataset.append((dataset.model_name, best_model_so_far, best_rmse_so_far))
+        best_models_per_dataset.append((dataset.model_name, best_model_name_so_far, best_rmse_so_far))
+        model_heatmap(dataset, best_model_so_far)
     
     for i in range(len(best_models_per_dataset)):
         model_name, best_model, best_rmse = best_models_per_dataset[i]

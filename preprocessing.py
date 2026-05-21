@@ -691,7 +691,10 @@ def build_tables_for_paper_models(player_data, cutoff_date: datetime.datetime = 
     # Players who were already 2400+ at the time of the first elo report in April 1968
     early_high_elo = base_table["elo2400_date"] < datetime.datetime(1968, 4, 1)
 
-    base_table = base_table[~early_high_elo]    # These players don't have useful data for our models.
+    # And let's get rid of any obvious wrong birthdays.
+    wrong_birthday = (base_table["gm_title_age"] < 5) | (base_table["gm_title_age"] > 66)
+
+    base_table = base_table[~early_high_elo & ~wrong_birthday]    # These players don't have useful data for our models.
 
     # Players who became GMs after 1990
     ninties_or_later_gms = base_table["gm_title_date"] >= datetime.datetime(1990, 1, 1)

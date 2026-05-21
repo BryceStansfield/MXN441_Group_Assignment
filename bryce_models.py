@@ -7,7 +7,7 @@ from preprocessing import get_full_timeseries_model
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import ElasticNetCV
 from sklearn.metrics import PredictionErrorDisplay
 import matplotlib.pyplot as plt
 from statsmodels.tsa.stattools import acf, pacf
@@ -46,6 +46,16 @@ LINEAR_MODEL_PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
 RESULT_PLOT_DIR = PLOT_DIR / "timeseries_result_plots"
 RESULT_PLOT_DIR.mkdir(parents=True, exist_ok=True)
+
+def plot_model_predictions_vs_reality(reality, predictions, model_name, sample_name, lag):
+    plt.clf()
+    x_axis = [i for i in range(len(reality))]
+    plt.plot(x_axis, reality)
+    plt.plot(x_axis, predictions)
+    plt.ylabel("Elo")
+    plt.title(f"{model_name} (lag {lag}), {sample_name}")
+    plt.savefig(RESULT_PLOT_DIR / f"{model_name}_{lag}_{sample_name}.png")
+
 
 # Data preprocessing
 def yearly_first_data_subset(full_df: pd.DataFrame):
@@ -164,8 +174,6 @@ def train_transformers(df: pd.DataFrame, max_lag=1, test_run = False):
     early_stop_callback = EarlyStopping(
         monitor="val_loss", min_delta=1e-4, patience=20, verbose=False, mode="min"
     )
-    #lr_logger = LearningRateMonitor()  # log the learning rate
-    #logger = TensorBoardLogger("lightning_logs")  # logging results to a tensorboard
 
     study_path = TRANSFORMER_CACHE_DIRECTORY / f"transformer_study.pkl"
 
@@ -283,7 +291,7 @@ def train_elo_prediction_linear_model(timeseries_df: pd.DataFrame, lag=1):
     X_train, y_train, player_fide_ids = extract_linear_model_data(data_splitter_and_scaler.train_df, lag)
     X_test, y_test, player_fide_ids = extract_linear_model_data(data_splitter_and_scaler.test_df, lag)
 
-    model = LinearRegression().fit(X_train, y_train)
+    model = ElasticNetCV(l1_ratio=[0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.95,0.99,1.0]).fit(X_train, y_train)
     display = PredictionErrorDisplay.from_estimator(
         model, X_train, y_train, kind="residual_vs_predicted"
     )

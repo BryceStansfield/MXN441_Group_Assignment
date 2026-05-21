@@ -2,3 +2,6 @@ __pycache__/*
 *.pyc
 plots/*
 lightning_logs/*
+*.tex
+visualization/*
+*.zip
