@@ -14,12 +14,14 @@ from statsmodels.tsa.stattools import acf, pacf
 import pathlib
 from sklearn.metrics import mean_squared_error
 from statsmodels.tsa.api import SimpleExpSmoothing
+from sklearn.preprocessing import StandardScaler
 
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import EarlyStopping
 
 from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
 from pytorch_forecasting.metrics.point import RMSE
+from pytorch_forecasting.metrics import QuantileLoss
 from pytorch_forecasting.models.temporal_fusion_transformer.tuning import optimize_hyperparameters
 from pytorch_forecasting.data.encoders import NaNLabelEncoder
 
@@ -97,7 +99,16 @@ def split_timeseries_data_table_into_train_and_test(df: pd.DataFrame, test_ratio
 
     return df[df["fideid"].isin(train_fideids)].reset_index(drop=True), df[df["fideid"].isin(validation_fideids)].reset_index(drop=True), df[df["fideid"].isin(test_fideids)].reset_index(drop=True)
 
-def extract_linear_model_data(df: pd.DataFrame, lag):
+def plot_model_predictions(ys_preds, elo_scale, elo_minimum,  output_name):
+    output = ys_preds[1]
+    ys = ys_preds[0]
+    plt.clf()
+    plt.plot([i for i in range(len(ys))], ys * elo_scale + elo_minimum, label="Real Values")
+    plt.plot([i  for i in range(len(output))], output * elo_scale + elo_minimum, label="Predictions")
+    plt.legend()
+    plt.savefig(RESULT_PLOT_DIR / output_name)
+
+def extract_linear_model_data(df: pd.DataFrame, lag, scaler=None):
     # pooled regression with arima errors. Look up python or r code.
     X_columns = ["time", "age_at_time", "elo", "games", "age*games"]
 
@@ -114,8 +125,15 @@ def extract_linear_model_data(df: pd.DataFrame, lag):
         player_Xs.append(player_df[X_columns])
         player_Ys.append(player_df["next_year_elo"].values)
         player_fide_ids += [fide_id] * len(player_df)
+    
+    player_Xs = pd.concat(player_Xs, ignore_index=True)
+    if scaler is None:
+        scaler = StandardScaler()
+        player_Xs = scaler.fit_transform(player_Xs)
+    else:
+        player_Xs = scaler.transform(player_Xs)
 
-    return pd.concat(player_Xs, ignore_index=True), np.hstack(player_Ys), player_fide_ids
+    return player_Xs, np.hstack(player_Ys), player_fide_ids, scaler
 
 def train_transformers(df: pd.DataFrame, max_lag=1, test_run = False):
     df = df.sort_values(["fideid", "time"])
@@ -134,7 +152,8 @@ def train_transformers(df: pd.DataFrame, max_lag=1, test_run = False):
         max_prediction_length=max_lag,
         time_varying_known_reals=["time", "age_at_time"],
         time_varying_unknown_reals=[
-            "elo"
+            "elo",
+            "games"
         ],
         categorical_encoders={"fideid": NaNLabelEncoder(add_nan=True)},
         time_varying_known_categoricals=[],
@@ -248,50 +267,189 @@ def train_transformers(df: pd.DataFrame, max_lag=1, test_run = False):
                 torch.save([tft._hparams, tft.state_dict()], f)
 
     # Let's display our results on our best and worse performing test_set.
-    worst_testset_tuple = None
-    worst_testset_rmse = 0
-    best_testset_tuple = None
-    best_testset_rmse = 10000000000000000
+    worst_testset_tuples = [None for _ in range(max_lag)]
+    worst_testset_mse = [0 for _ in range(max_lag)]
+    best_testset_tuples = [None for _ in range(max_lag)]
+    best_testset_mse = [10000000000000000 for _ in range(max_lag)]
+    all_mses = [[] for _ in range(max_lag)]
     for i, (test_set, test_set_loader) in enumerate(individual_test_datasets):
         predictions = tft.predict(test_set_loader, return_y=True, trainer_kwargs=dict(accelerator="cpu", logger=False))
 
-        rmse = RMSE()(predictions.output, predictions.y)
-        if rmse > worst_testset_rmse:
-            worst_testset_rmse = rmse
-            worst_testset_tuple = (test_set, predictions)
-        if rmse < best_testset_rmse:
-            best_testset_rmse = rmse
-            best_testset_tuple = (test_set, predictions)
+        for i in range(min(max_lag, predictions.output.size()[1])):
+            non_zero_inds = torch.nonzero(predictions.y[0][:, i])
+            y_nonzero = predictions.y[0][non_zero_inds, i]
+            preds_nonzero = predictions.output[non_zero_inds, i]
 
-    def plot_model_predictions(test_predictions, output_name):
-        print(torch.tensor(test_set["elo"].values))
-        output = test_predictions.output.flatten()
-        ys = test_predictions.y[0].flatten()
-        print(output.size())
-        print(ys.size())
-        plt.clf()
-        plt.plot([i + max_lag for i in range(len(ys))], ys * data_splitter_and_scaler.get_elo_scale() + data_splitter_and_scaler.get_elo_minimum())
-        plt.plot([i + max_lag for i in range(len(output))], output * data_splitter_and_scaler.get_elo_scale() + data_splitter_and_scaler.get_elo_minimum())
-        plt.savefig(RESULT_PLOT_DIR / output_name)
+            mse = RMSE()(preds_nonzero, y_nonzero) ** 2
+            all_mses[i].append((mse, len(y_nonzero),))
+
+            if mse > worst_testset_mse[i]:
+                worst_testset_mse[i] = mse
+                worst_testset_tuples[i] = (y_nonzero, preds_nonzero)
+            if mse < best_testset_mse[i]:
+                best_testset_mse[i] = mse
+                best_testset_tuples[i] = (y_nonzero, preds_nonzero)
     
-    plot_model_predictions(worst_testset_tuple[1], f"torch_worst_prediction_{max_lag}.png")
-    plot_model_predictions(best_testset_tuple[1], f"torch_best_prediction_{max_lag}.png")
+    for i in range(max_lag):
+        plot_model_predictions(worst_testset_tuples[i], data_splitter_and_scaler.get_elo_scale(), data_splitter_and_scaler.get_elo_minimum(), f"linear_worst_prediction_{i+1}.png")
+        plot_model_predictions(best_testset_tuples[i], data_splitter_and_scaler.get_elo_scale(), data_splitter_and_scaler.get_elo_minimum(), f"linear_best_prediction_{i+1}.png")
+    
+    rmses_by_lag = []
+    for i in range(0, max_lag):
+        mses = all_mses[i]
 
+        sum_lengths = sum(x[1] for x in mses)
+        sum_weighted_mses = sum([x[0] * x[1] for x in mses])
+        rmses_by_lag.append((sum_weighted_mses / sum_lengths)**0.5 * data_splitter_and_scaler.get_elo_scale())
+    
+    return rmses_by_lag
+    
+def train_full_timeseries_transformer(df: pd.DataFrame):
+    df = df.sort_values(["fideid", "time"])
+    df["time_idx"] = df.groupby("fideid").cumcount()
+
+    data_splitter_and_scaler = DataSplitterAndScaler(df)
+
+    training = TimeSeriesDataSet(
+        data_splitter_and_scaler.train_df,
+        time_idx="time_idx",
+        group_ids=["fideid"],
+        target="elo",
+        min_encoder_length=1,
+        max_encoder_length=120,
+        min_prediction_length=1,
+        max_prediction_length=120,
+        time_varying_known_reals=["time", "age_at_time"],
+        time_varying_unknown_reals=[
+            "elo",
+            "games"
+        ],
+        categorical_encoders={"fideid": NaNLabelEncoder(add_nan=True)},
+        time_varying_known_categoricals=[],
+        time_varying_unknown_categoricals=[],
+        add_relative_time_idx=True,
+        add_target_scales=True,
+        add_encoder_length=True,
+    )
+
+    # create validation set (predict=True) which means to predict the last max_prediction_length points in time
+    # for each series
+    validation = TimeSeriesDataSet.from_dataset(
+        training, data_splitter_and_scaler.validation_df, predict=False, stop_randomization=True
+    )
+
+    test_dataset = TimeSeriesDataSet.from_dataset(
+        training, data_splitter_and_scaler.test_df, predict=False, stop_randomization=True
+    )
+
+    individual_test_datasets = [
+        (test_set, TimeSeriesDataSet.from_dataset(training, test_set, predict=False, stop_randomization=True)) for test_set in data_splitter_and_scaler.split_test_into_individuals()
+    ]
+
+    # create dataloaders for model
+    batch_size = 128
+    train_dataloader = training.to_dataloader(
+        train=True, batch_size=batch_size, num_workers=10
+    )
+    val_dataloader = validation.to_dataloader(
+        train=False, batch_size=batch_size, num_workers=10
+    )
+    test_dataloader = test_dataset.to_dataloader(
+        train=False, batch_size=batch_size, num_workers=10
+    )
+
+    # configure network and trainer
+    early_stop_callback = EarlyStopping(
+        monitor="val_loss", min_delta=1e-4, patience=2, verbose=False, mode="min"
+    )
+
+    study_path = TRANSFORMER_CACHE_DIRECTORY / f"full_transformer_study.pkl"
+
+    print("Doing optuna study for best params")
+    if study_path.exists():
+        with open(study_path, "rb") as f:
+            study = pickle.load(f) 
+    else:
+        study = optimize_hyperparameters(
+            train_dataloader,
+            val_dataloader,
+            model_path=str(TRANSFORMER_CACHE_DIRECTORY / f"full_optuna"),
+            n_trials=200,
+            max_epochs=50,
+            gradient_clip_val_range=(0.01, 1.0),
+            hidden_size_range=(8, 128),
+            hidden_continuous_size_range=(8, 128),
+            attention_head_size_range=(1, 4),
+            learning_rate_range=(0.001, 0.1),
+            dropout_range=(0.1, 0.3),
+            trainer_kwargs=dict(limit_train_batches=30),
+            reduce_on_plateau_patience=4,
+            use_learning_rate_finder=True
+        )
+
+        with open(study_path, "wb") as f:
+            pickle.dump(study, f)
+
+    full_model_path = TRANSFORMER_CACHE_DIRECTORY / f"full_transformer.model"
+    loss = QuantileLoss([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
+    if full_model_path.exists():
+        print("Loading Model from cache")
+
+        with open(full_model_path, 'rb') as f:
+            kwargs, state_dict = torch.load(full_model_path, weights_only=False)
+            tft = TemporalFusionTransformer.from_dataset(
+                training,
+                loss=loss,
+                **kwargs
+            )
+            tft.load_state_dict(state_dict)
+    else:
+        print("Training model")
+        trainer = pl.Trainer(
+            max_epochs=5000,
+            accelerator="cpu",
+            enable_model_summary=True,
+            # fast_dev_run=True,  # comment in to check that networkor dataset has no serious bugs
+            callbacks=[early_stop_callback],
+            gradient_clip_val=study.best_params["gradient_clip_val"]
+        )
+
+        model_params = study.best_params.copy()
+        del model_params["gradient_clip_val"]
+        tft = TemporalFusionTransformer.from_dataset(
+            training,
+            loss=loss,
+            log_interval=10,  # uncomment for learning rate finder and otherwise, e.g. to 10 for logging every 10 batches
+            optimizer="ranger",
+            reduce_on_plateau_patience=4,
+            **model_params
+        )
+        print(f"Number of parameters in network: {tft.size() / 1e3:.1f}k")
+
+        trainer.fit(
+            tft,
+            train_dataloaders=train_dataloader,
+            val_dataloaders=val_dataloader
+        )
+
+        with open(full_model_path, 'wb') as f:
+            torch.save([tft._hparams, tft.state_dict()], f)
+    
     predictions = tft.predict(
         test_dataloader, return_y=True, trainer_kwargs=dict(accelerator="cpu")
     )
 
-    print(RMSE()(predictions.output, predictions.y) * data_splitter_and_scaler.get_elo_scale())
     return {"rmse": RMSE()(predictions.output, predictions.y) * data_splitter_and_scaler.get_elo_scale()}
+
 
 def train_elo_prediction_linear_model(timeseries_df: pd.DataFrame, lag=1):
     # First we split and scale our data
     data_splitter_and_scaler = DataSplitterAndScaler(timeseries_df, test_ratio=0.2, validation_ratio=0)
 
-    X_train, y_train, player_fide_ids = extract_linear_model_data(data_splitter_and_scaler.train_df, lag)
-    X_test, y_test, player_fide_ids = extract_linear_model_data(data_splitter_and_scaler.test_df, lag)
+    X_train, y_train, training_player_fide_ids, scaler = extract_linear_model_data(data_splitter_and_scaler.train_df, lag)
+    X_test, y_test, test_player_fide_ids, _ = extract_linear_model_data(data_splitter_and_scaler.test_df, lag, scaler)
 
-    model = ElasticNetCV(l1_ratio=[0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.95,0.99,1.0]).fit(X_train, y_train)
+    model = ElasticNetCV(l1_ratio=[0.01,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.95,0.99,1.0]).fit(X_train, y_train)
     display = PredictionErrorDisplay.from_estimator(
         model, X_train, y_train, kind="residual_vs_predicted"
     )
@@ -307,7 +465,7 @@ def train_elo_prediction_linear_model(timeseries_df: pd.DataFrame, lag=1):
 
     differences = model.predict(X_train) - y_train
     differences_by_fideid = {}
-    for fide_id, difference in zip(player_fide_ids, differences):
+    for fide_id, difference in zip(training_player_fide_ids, differences):
         if fide_id not in differences_by_fideid:
             differences_by_fideid[fide_id] = []
         differences_by_fideid[fide_id].append(difference)
@@ -362,9 +520,32 @@ def train_elo_prediction_linear_model(timeseries_df: pd.DataFrame, lag=1):
     plt.cla()
     plt.close()
 
+    # This is incredibly inefficient, but realistically I don't think this code is going to be run by many (any?) other people.
+    worst_mse_error = 0
+    worst_mse_tuple = None
+    best_mse_error = 1000000000
+    best_mse_tuple = None
+
+    X_test["Predicted_Elo"] = model.predict(X_test)
+    X_test["Real_Future_Elo"] = y_test
+    X_test["fideid"] = test_player_fide_ids
+
+    for fide_id, player_df in X_test.groupby("fideid"):
+        player_square_errors = (player_df["Predicted_Elo"].values - player_df["Real_Future_Elo"].values) ** 2
+        
+        mse = np.mean(player_square_errors)
+        if mse > worst_mse_error:
+            worst_mse_error = mse
+            worst_mse_tuple = (player_df["Real_Future_Elo"].values, player_df["Predicted_Elo"].values,)
+        if mse < best_mse_error:
+            best_mse_error = mse
+            best_mse_tuple = (player_df["Real_Future_Elo"].values, player_df["Predicted_Elo"].values,)
+        
+    plot_model_predictions(worst_mse_tuple, data_splitter_and_scaler.get_elo_scale(), data_splitter_and_scaler.get_elo_minimum(), f"exp_smoothing_worst_prediction_{lag}.png")
+    plot_model_predictions(best_mse_tuple, data_splitter_and_scaler.get_elo_scale(), data_splitter_and_scaler.get_elo_minimum(), f"exp_smoothing_best_prediction_{lag}.png")
 
     # Let's return our RMSE on the test set
-    return {"rmse": np.sqrt(mean_squared_error(y_test, model.predict(X_test))) * data_splitter_and_scaler.get_elo_scale()}
+    return {"rmse": np.sqrt(mean_squared_error(X_test["Predicted_Elo"].values, X_test["Real_Future_Elo"].values)) * data_splitter_and_scaler.get_elo_scale()}
 
 def exponential_smoothing(timeseries_df: pd.DataFrame, lag=1):
     with warnings.catch_warnings():
@@ -397,14 +578,33 @@ def exponential_smoothing(timeseries_df: pd.DataFrame, lag=1):
         
         # Now, let's do the same thing on the test set, but with our best alpha.
         square_errors = []
+
+        best_mse_error = 100000000000
+        worst_mse_error = 0
+        best_mse_tuple = None
+        worst_mse_tuple = None
+
         for fide_id, player_df in data_splitter_and_scaler.test_df.groupby("fideid"):
             player_df = player_df.copy()
             model = SimpleExpSmoothing(player_df["elo"]).fit(smoothing_level=best_alpha, optimized=False)
             player_df["predicted_elo"] = model.fittedvalues
             player_df["predicted_elo"] = player_df["predicted_elo"].shift(lag)
             player_df = player_df.dropna(subset=["predicted_elo"])
-            square_errors.extend((player_df["elo"] - player_df["predicted_elo"]) ** 2)
-        
+            player_square_errors = (player_df["elo"] - player_df["predicted_elo"]) ** 2
+            
+            mse = np.mean(player_square_errors)
+            if mse > worst_mse_error:
+                worst_mse_error = mse
+                worst_mse_tuple = (player_df["elo"].values, player_df["predicted_elo"].values,)
+            if mse < best_mse_error:
+                best_mse_error = mse
+                best_mse_tuple = (player_df["elo"].values, player_df["predicted_elo"].values,)
+            
+            square_errors.extend(player_square_errors)
+
+        plot_model_predictions(worst_mse_tuple, data_splitter_and_scaler.get_elo_scale(), data_splitter_and_scaler.get_elo_minimum(), f"exp_smoothing_worst_prediction_{lag}.png")
+        plot_model_predictions(best_mse_tuple, data_splitter_and_scaler.get_elo_scale(), data_splitter_and_scaler.get_elo_minimum(), f"exp_smoothing_best_prediction_{lag}.png")
+
         return {"rmse": np.sqrt(np.mean(square_errors)) * data_splitter_and_scaler.get_elo_scale()}
 
 class DataSplitterAndScaler:
@@ -432,39 +632,39 @@ class DataSplitterAndScaler:
         test_sets = []
 
         for _, df in self.test_df.groupby("fideid"):
-            if len(df) >= min_length:
+            if len(df) >= 1:        # Might change this
                 test_sets.append(df)
         
         return test_sets
 
 if __name__ == "__main__":
-    # Build tables for paper models and print out the first few rows of each model's table
-    timeseries_data_table = get_timeseries_data_table()
+    full_timeseries_data = get_full_timeseries_model(ELO_CUTOFF)[f"All ever > {ELO_CUTOFF} players"]
 
-    performances = {"transformer": [], "pooled_linear": [], "simple_exponential_smoothing": []}
+    #train_full_timeseries_transformer(full_timeseries_data)
+
+    # Build tables for paper models and print out the first few rows of each model's table
+    timeseries_data_table = yearly_first_data_subset(full_timeseries_data)
     MAX_LAG = 10
 
-    train_transformers(timeseries_data_table, MAX_LAG, test_run=False)
-    for lag in range(1, MAX_LAG+1):
-        performances["pooled_linear"][lag] = train_elo_prediction_linear_model(timeseries_data_table, lag=lag)
-        performances["simple_exponential_smoothing"][lag] = exponential_smoothing(timeseries_data_table, lag=lag)
+    transformer_rmses = train_transformers(timeseries_data_table, MAX_LAG, test_run=False)
 
-    performance_dicts = []
+    performances = {"transformer": transformer_rmses, "pooled_linear": [], "simple_exponential_smoothing": []}
+
     for lag in range(1, MAX_LAG+1):
-        for model in performances[lag]:
-            performance_dicts.append({"lag": lag, "model": model, "rmse": performances[lag][model]["rmse"]})
+        performances["pooled_linear"].append(train_elo_prediction_linear_model(timeseries_data_table, lag=lag)["rmse"])
+        performances["simple_exponential_smoothing"].append(exponential_smoothing(timeseries_data_table, lag=lag)["rmse"])
+
+    print(performances)
     
     # Lets plot our performances.
-    rmse_dict = {}
-    for key in performances:
-        rmse_dict[key] = [x["rmse"] for x in performances[key]]
     plt.clf()
     
-    for key in rmse_dict:
-        plt.plot([i for i in range(1, MAX_LAG+1)], rmse_dict[key], label=key)
+    for key in performances:
+        plt.plot([i for i in range(1, MAX_LAG+1)], float(performances[key]), label=key)
     plt.xlabel("Lag")
-    plt.ylabel("rmse")
+    plt.ylabel("rmse (elo)")
     plt.title("Model performances vs lag")
+    plt.legend()
     plt.savefig(PLOT_DIR / f"{MAX_LAG}_timeseries_model_performances.png")
     
-    pd.DataFrame(performance_dicts).to_csv("cache/timeseries_performances.csv")
+    pd.DataFrame(performances).to_csv("cache/timeseries_performances.csv")
