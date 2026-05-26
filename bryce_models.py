@@ -407,7 +407,7 @@ def train_full_timeseries_transformer(df: pd.DataFrame):
         print("Training model")
         trainer = pl.Trainer(
             max_epochs=5000,
-            accelerator="cpu",
+            accelerator="gpu",
             enable_model_summary=True,
             # fast_dev_run=True,  # comment in to check that networkor dataset has no serious bugs
             callbacks=[early_stop_callback],
