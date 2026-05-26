@@ -526,11 +526,12 @@ def train_elo_prediction_linear_model(timeseries_df: pd.DataFrame, lag=1):
     best_mse_error = 1000000000
     best_mse_tuple = None
 
-    X_test["Predicted_Elo"] = model.predict(X_test)
-    X_test["Real_Future_Elo"] = y_test
-    X_test["fideid"] = test_player_fide_ids
+    test_df = pd.DataFrame()    
+    test_df["Predicted_Elo"] = model.predict(X_test)
+    test_df["Real_Future_Elo"] = y_test
+    test_df["fideid"] = test_player_fide_ids
 
-    for fide_id, player_df in X_test.groupby("fideid"):
+    for fide_id, player_df in test_df.groupby("fideid"):
         player_square_errors = (player_df["Predicted_Elo"].values - player_df["Real_Future_Elo"].values) ** 2
         
         mse = np.mean(player_square_errors)
@@ -545,7 +546,7 @@ def train_elo_prediction_linear_model(timeseries_df: pd.DataFrame, lag=1):
     plot_model_predictions(best_mse_tuple, data_splitter_and_scaler.get_elo_scale(), data_splitter_and_scaler.get_elo_minimum(), f"exp_smoothing_best_prediction_{lag}.png")
 
     # Let's return our RMSE on the test set
-    return {"rmse": np.sqrt(mean_squared_error(X_test["Predicted_Elo"].values, X_test["Real_Future_Elo"].values)) * data_splitter_and_scaler.get_elo_scale()}
+    return {"rmse": np.sqrt(mean_squared_error(test_df["Predicted_Elo"].values, test_df["Real_Future_Elo"].values)) * data_splitter_and_scaler.get_elo_scale()}
 
 def exponential_smoothing(timeseries_df: pd.DataFrame, lag=1):
     with warnings.catch_warnings():
@@ -640,7 +641,7 @@ class DataSplitterAndScaler:
 if __name__ == "__main__":
     full_timeseries_data = get_full_timeseries_model(ELO_CUTOFF)[f"All ever > {ELO_CUTOFF} players"]
 
-    #train_full_timeseries_transformer(full_timeseries_data)
+    train_full_timeseries_transformer(full_timeseries_data)
 
     # Build tables for paper models and print out the first few rows of each model's table
     timeseries_data_table = yearly_first_data_subset(full_timeseries_data)
@@ -660,7 +661,7 @@ if __name__ == "__main__":
     plt.clf()
     
     for key in performances:
-        plt.plot([i for i in range(1, MAX_LAG+1)], float(performances[key]), label=key)
+        plt.plot([i for i in range(1, MAX_LAG+1)], list(float(x) for x in performances[key]), label=key)
     plt.xlabel("Lag")
     plt.ylabel("rmse (elo)")
     plt.title("Model performances vs lag")
