@@ -332,9 +332,11 @@ def train_full_timeseries_transformer(df: pd.DataFrame):
         add_encoder_length=True,
     )
 
-    times = data_splitter_and_scaler.train_df["time"].copy().sort_values()
+    times = data_splitter_and_scaler.train_df["time"].unique().copy()
+    times = list(times)
+    times.sort()
     time_indicies = {}
-    for (i, time) in enumerate(times.array):
+    for (i, time) in enumerate(times):
         time_indicies[time] = i
 
 
@@ -357,6 +359,9 @@ def train_full_timeseries_transformer(df: pd.DataFrame):
 
         above_2600_rows = test_set[test_set["elo"] >= elo_2600]
         min_2600_time = min(above_2600_rows["time"])
+
+        if min_2600_time == min_2700_time:
+            continue
         
         before_2600_stuff = test_set[test_set["time"] < min_2600_time]
         before_2600_stuff = before_2600_stuff.copy()
@@ -450,9 +455,12 @@ def train_full_timeseries_transformer(df: pd.DataFrame):
             torch.save([tft._hparams, tft.state_dict()], f)
     
     square_errors = []
-    for _, (test_2700_time, test_2600_time, test_set_loader) in enumerate(individual_test_datasets):
+    for test_set_i, (test_2700_time, test_2600_time, test_set_loader) in enumerate(individual_test_datasets):
+        if test_set_i == 22:
+            pass
         predictions = tft.predict(test_set_loader, mode="quantiles", trainer_kwargs=dict(accelerator="cpu", logger=False))
         prediction_start_time_index = time_indicies[test_2600_time]+1
+        print(times[prediction_start_time_index])
 
         elo_2700_times = []
         for q in range(9):
@@ -461,6 +469,7 @@ def train_full_timeseries_transformer(df: pd.DataFrame):
                 if quantile_predictions[i] > elo_2700:
                     if prediction_start_time_index + i < len(times):
                         elo_2700_times.append(times[prediction_start_time_index + i])
+                        break
                     else:
                         break
         
@@ -468,6 +477,9 @@ def train_full_timeseries_transformer(df: pd.DataFrame):
             print("Elo 2700 not predicted.")
         else:
             square_errors.append((np.mean(elo_2700_times) - test_2700_time)**2)
+
+            if (np.mean(elo_2700_times) - test_2700_time)**2 > 0.1:
+                pass
 
     return ((np.mean(np.array(square_errors))**0.5) * data_splitter_and_scaler.get_time_scale()) / (86400)
 

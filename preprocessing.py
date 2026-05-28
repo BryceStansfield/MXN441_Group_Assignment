@@ -746,7 +746,7 @@ def build_tables_for_paper_models(player_data, cutoff_date: datetime.datetime = 
         TabularModelData("Paper Model 12", base_table[gm_before_20_and_2700 & gm_and_max_elo_ages_defined & max_elo_valid], X_columns=["gm_title_age"], Y_columns=["elo2600_to_2700_days"]),
     ]
 
-    vol_models = [TabularModelData(f"{model.model_name} + vol", model.data_table, X_columns=model.X_columns + ["2000_2600_avg_abs_elo_change_per_month"], Y_columns=model.Y_columns) for model in models]
+    vol_models = [TabularModelData(f"{model.model_name} + vol", model.data_table, X_columns=model.X_columns + ["2000_2500_avg_abs_elo_change_per_month"] if i in [2,3,4,5,6,8,9] else ["2000_2600_avg_abs_elo_change_per_month"], Y_columns=model.Y_columns) for i, model in enumerate(models)]
 
     condition_sets = {}
     if return_condition_sets_and_personal_info:
