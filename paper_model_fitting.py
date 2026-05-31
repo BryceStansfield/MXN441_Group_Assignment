@@ -6,12 +6,14 @@ from sklearn.linear_model import LinearRegression as SLinearRegression
 from sklearn.linear_model import ElasticNet, Ridge
 from sklearn.ensemble import AdaBoostRegressor
 from sklearn.model_selection import GridSearchCV as SGridSearchCV
+from sklearn.pipeline import Pipeline
 from sklearn.neural_network import MLPRegressor
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.model_selection import cross_val_score
 from sklearn.svm import SVR
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.tree import DecisionTreeRegressor
+from sklearn.preprocessing import StandardScaler
 import xgboost as xgb
 import pathlib
 import pandas as pd
@@ -90,7 +92,7 @@ class PaperAdaBoostModel:
         
         self.cv_model = SGridSearchCV(self.base_model,
                                       param_grid={"n_estimators": [10, 20, 50, 100, 200, 500, 1000],
-                                                  "learning_rate": [0.2, 0.5, 1, 2, 5]},
+                                                  "learning_rate": [0.1, 0.2, 0.3, 0.4, 0.5]},
                                       cv=5,
                                       scoring="neg_root_mean_squared_error",
                                       n_jobs=-1)
@@ -112,14 +114,16 @@ class PaperMLPModel:
     def __init__(self, data: TabularModelData):
         self.data = data
         self.base_model = MLPRegressor(max_iter = 10000, random_state=1)
+        self.pipeline = Pipeline([("scaler", StandardScaler()), ("model", self.base_model)])
+
         self.X = self.data.data_table[self.data.X_columns]
         self.Y = self.data.data_table[self.data.Y_columns].values.ravel()
         self.rmses = None
         
-        self.cv_model = SGridSearchCV(self.base_model,
-                                      param_grid={"hidden_layer_sizes": [(10,), (50,), (100,), (10, 10), (50, 50), (100, 100), (10, 10, 10), (50, 50, 50), (100, 100, 100)],
-                                                  "learning_rate_init": [0.001, 0.01, 0.1],
-                                                  "alpha": [0.0001, 0.001, 0.01]},
+        self.cv_model = SGridSearchCV(self.pipeline,
+                                      param_grid={"model__hidden_layer_sizes": [(10,), (50,), (100,), (10, 10), (50, 50), (100, 100), (10, 10, 10), (50, 50, 50), (100, 100, 100)],
+                                                  "model__learning_rate_init": [0.001, 0.01, 0.1],
+                                                  "model__alpha": [0.0001, 0.001, 0.01]},
                                       cv=5,
                                       scoring="neg_root_mean_squared_error",
                                       n_jobs=-1)
@@ -141,13 +145,14 @@ class PaperElasticModel:
     def __init__(self, data: TabularModelData):
         self.data = data
         self.base_model = ElasticNet(max_iter=10000, random_state=1)
+        self.pipeline = Pipeline([("scaler", StandardScaler()), ("model", self.base_model)])
         self.X = self.data.data_table[self.data.X_columns]
         self.Y = self.data.data_table[self.data.Y_columns].values.ravel()
         self.rmses = None
 
-        self.cv_model = SGridSearchCV(self.base_model,
-                                      param_grid={"alpha": [0.0001, 0.001, 0.01, 0.1, 1, 10, 100],
-                                                  "l1_ratio": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]},
+        self.cv_model = SGridSearchCV(self.pipeline,
+                                      param_grid={"model__alpha": [0.0001, 0.001, 0.01, 0.1, 1, 10, 100],
+                                                  "model__l1_ratio": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]},
                                       cv=5,
                                       scoring="neg_root_mean_squared_error",
                                       n_jobs=-1)
@@ -168,13 +173,14 @@ class PaperRidgeModel:
     def __init__(self, data: TabularModelData):
         self.data = data
         self.base_model = Ridge(max_iter=10000, random_state=1)
+        self.pipeline = Pipeline([("scaler", StandardScaler()), ("model", self.base_model)])
 
         self.X = self.data.data_table[self.data.X_columns]
         self.Y = self.data.data_table[self.data.Y_columns].values.ravel()
         self.rmses = None
 
-        self.cv_model = SGridSearchCV(self.base_model,
-                                      param_grid={"alpha": [0.0001, 0.001, 0.01, 0.1, 1, 10, 100]},
+        self.cv_model = SGridSearchCV(self.pipeline,
+                                      param_grid={"model__alpha": [0.0001, 0.001, 0.01, 0.1, 1, 10, 100]},
                                       cv=5,
                                       scoring="neg_root_mean_squared_error",
                                       n_jobs=-1)
@@ -220,14 +226,16 @@ class PaperSVRModel:
     def __init__(self, data: TabularModelData):
         self.data = data
         self.base_model = SVR()
+        self.pipeline = Pipeline([("scaler", StandardScaler()), ("model", self.base_model)])
         self.X = self.data.data_table[self.data.X_columns]
         self.Y = self.data.data_table[self.data.Y_columns].values.ravel()
         self.rmses = None
         
-        self.cv_model = SGridSearchCV(self.base_model,
-                                      param_grid={"C": [0.1, 1, 10, 100],
-                                                  "gamma": [0.001, 0.01, 0.1, 1],
-                                                  "kernel": ["rbf", "linear"]},
+        self.cv_model = SGridSearchCV(self.pipeline,
+                                      param_grid={"model__C": [0.1, 1, 10, 100],
+                                                  "model__gamma": [0.001, 0.01, 0.1, 1],
+                                                  "model__epsilon": [0.01, 0.1, 0.5, 1.0],
+                                                  "model__kernel": ["rbf", "linear"]},
                                       cv=5,
                                       scoring="neg_root_mean_squared_error",
                                       n_jobs=-1)
@@ -252,8 +260,8 @@ class PaperRFModel:
         self.rmses = None
         
         self.cv_model = SGridSearchCV(self.base_model,
-                                      param_grid={"n_estimators": [10, 20, 50, 100, 200, 500, 1000],
-                                                  "max_depth": [1, 3, 5]},
+                                      param_grid={"n_estimators": [1000],
+                                                  "max_depth": [1, 3, 5, None]},
                                       cv=5,
                                       scoring="neg_root_mean_squared_error",
                                       n_jobs=-1)
